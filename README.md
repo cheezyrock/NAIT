@@ -1,44 +1,74 @@
-# NAIT Teaching AI Simulator (Core)
+# NAIT Teaching AI Simulator
 
-A minimal Python simulation core for teaching high-school students neural-network basics with a policy they can manually tune.
+A minimal local Python app for teaching high-school students how a small neural-network policy maps sensor inputs to steering behavior.
 
-## What is implemented
+## Features
 
-- **Policy**: single-layer linear NN (no hidden layer), `N` sensors -> 1 steering output.
-- **Forward equation**: `steering = tanh(bias + sum(sensor[i] * weight[i]))`.
-- **Sensors**: configurable sensor angles and max range; ray/segment intersections against track boundaries.
-- **Track**: explicit line-segment walls so any track can be evaluated with the same policy.
-- **Agent**: constant-speed car with steering-only control.
-- **Simulator output**: survival time, distance traveled, cause of death, and path trace.
-- **Policy I/O**: JSON save/load helpers.
+- **Authoritative simulation core** in `simulator_core.py`.
+- **Single-layer policy** (no hidden layer):
+  - `steering = tanh(bias + sum(sensor[i] * weight[i]))`
+- **Interactive desktop UI** (pygame) in `app.py`.
+- **Manual controls** for classroom tuning:
+  - sensor count
+  - sensor angle list
+  - sensor max range
+  - per-sensor weights
+  - bias
+  - car speed
+  - max turn rate
+  - run / pause / reset
+- **Policy JSON load/save** using the existing `LinearPolicy` format.
+- **Track switching** between:
+  - rectangular track
+  - custom chicane track
+- Live metrics display:
+  - sensor readings
+  - steering output
+  - survival time
+  - distance traveled
+  - crash reason
 
-## Quick start
+## Setup
 
-```python
-from simulator_core import (
-    LinearPolicy,
-    SensorArray,
-    CarAgent,
-    Simulator,
-    build_rect_track,
-)
-
-policy = LinearPolicy(
-    sensor_angles_deg=[-60, -30, 0, 30, 60],
-    # left sensors positive, right sensors negative for "steer away from danger"
-    weights=[1.2, 0.8, 0.0, -0.8, -1.2],
-    bias=0.0,
-)
-
-track = build_rect_track(width=12.0, height=8.0)
-sensors = SensorArray(sensor_angles_deg=policy.sensor_angles_deg, max_range=3.5)
-agent = CarAgent(position=(2.0, 4.0), heading_deg=0.0, speed=2.0, max_turn_rate_deg=120.0)
-
-sim = Simulator(track=track, policy=policy, agent=agent, sensor_array=sensors)
-result = sim.run(max_steps=400, dt=0.05)
-print(result)
+```bash
+python -m pip install -r requirements.txt
 ```
+
+## Run
+
+```bash
+python app.py
+```
+
+This starts a local desktop window (no REST/QR/web mode).
+
+## How to use in class
+
+1. Click text fields in the right panel to edit values.
+2. Use `Apply` to rebuild the policy/agent with edited parameters.
+3. Use `Run`, `Pause`, and `Reset` for simulation control.
+4. Use `Track` to switch between the rectangle and chicane tracks.
+5. Use `Save` / `Load` with the policy JSON path field (default `policy.json`).
+
+## Architecture notes
+
+- **Simulation ownership (reusable without UI):**
+  - `simulator_core.py`
+    - `LinearPolicy`: no-hidden-layer policy, JSON serialization helpers
+    - `SensorArray`: ray/segment sensing and normalization
+    - `CarAgent`: car state and movement
+    - `Track`: explicit wall segments
+    - `Simulator`: episode loop + result object
+- **Visualization and local controls:**
+  - `app.py`
+    - pygame rendering for track/car/sensors
+    - text-field + button controls for manual tuning
+    - runtime loop and on-screen metrics
+- **Track catalog / extension point:**
+  - `tracks.py`
+    - central registry of named track builders for easy future additions
 
 ## Notes
 
-This repository intentionally keeps the simulation core independent from any future UI, QR join flow, or REST API layer.
+- This version intentionally excludes hidden layers, training algorithms, REST APIs, QR joining, and multiplayer.
+- The simulator core remains importable and usable independently from the UI.
