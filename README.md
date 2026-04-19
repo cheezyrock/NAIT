@@ -29,6 +29,8 @@ python -m pip install -r requirements.txt
 python app.py
 ```
 
+`app.py` is the runnable entrypoint. It constructs a default rectangular track, configures sensors and a linear policy, runs the simulator, and prints distance, survival time, and crash reason to the console.
+
 ## Teacher controls (right panel)
 
 ### Runtime
