@@ -27,6 +27,18 @@ ACCENT = (102, 186, 255)
 GREEN = (82, 212, 153)
 RED = (255, 115, 115)
 
+ASSET_DIR = Path(__file__).resolve().parent / "assets"
+ASSET_SOURCES = {
+    "car.png": "",
+    "road.png": "",
+}
+TEXTURE_INPUT_KEYS = {
+    "car_texture_path": "car",
+    "road_texture_path": "road",
+    "wall_texture_path": "wall",
+    "panel_texture_path": "panel",
+}
+
 @dataclass
 class TrainRules:
     cycles: int = 20
@@ -100,6 +112,7 @@ class TeachingApp:
         self.car_sprite: pygame.Surface | None = None
         self.road_texture: pygame.Surface | None = None
         self.wall_texture: pygame.Surface | None = None
+        self.panel_texture: pygame.Surface | None = None
         self._build_embedded_assets()
 
         self.track_names = track_names()
@@ -223,6 +236,8 @@ class TeachingApp:
 
 
     def _download_asset(self, filename: str, url: str) -> Path | None:
+        if not url:
+            return None
         ASSET_DIR.mkdir(parents=True, exist_ok=True)
         target = ASSET_DIR / filename
         if target.exists():
@@ -243,14 +258,38 @@ class TeachingApp:
                 loaded[filename] = pygame.image.load(path.as_posix()).convert_alpha()
             except Exception:
                 continue
-        self.car_sprite = loaded.get("car.png")
-        self.road_texture = loaded.get("road.png")
-        self.wall_texture = self.road_texture.copy() if self.road_texture is not None else None
-        if self.wall_texture is not None:
+
+        if "car.png" in loaded:
+            self.car_sprite = loaded["car.png"]
+        if "road.png" in loaded:
+            self.road_texture = loaded["road.png"]
+            self.wall_texture = self.road_texture.copy()
             self.wall_texture.fill((120, 120, 130, 255), special_flags=pygame.BLEND_RGBA_MULT)
-        self.panel_texture = self.road_texture.copy() if self.road_texture is not None else None
-        if self.panel_texture is not None:
+            self.panel_texture = self.road_texture.copy()
             self.panel_texture.fill((70, 80, 100, 255), special_flags=pygame.BLEND_RGBA_MULT)
+
+    def _set_texture_from_file(self, texture_kind: str, source_path: str) -> bool:
+        path = Path(source_path).expanduser()
+        if not path.exists() or not path.is_file():
+            return False
+        try:
+            surface = pygame.image.load(path.as_posix()).convert_alpha()
+        except Exception:
+            return False
+
+        if texture_kind == "car":
+            self.car_sprite = surface
+            return True
+        if texture_kind == "road":
+            self.road_texture = surface
+            return True
+        if texture_kind == "wall":
+            self.wall_texture = surface
+            return True
+        if texture_kind == "panel":
+            self.panel_texture = surface
+            return True
+        return False
 
     def _blit_segment_texture(
         self,
@@ -447,11 +486,23 @@ class TeachingApp:
                 self.policy.accel_weights = None
                 self.policy.brake_weights = None
             self.sensor_array = SensorArray(list(self.policy.sensor_angles_deg), self.config.sensor_max_range)
+
+            linked = []
+            for input_key, texture_kind in TEXTURE_INPUT_KEYS.items():
+                raw_value = values.get(input_key, "")
+                if not raw_value:
+                    continue
+                if self._set_texture_from_file(texture_kind, raw_value):
+                    linked.append(texture_kind)
+
             self._reseed_training_population()
             self.options_open = False
             self.input_fields = []
             self.toggle_fields = []
-            self.status = "Options applied"
+            if linked:
+                self.status = f"Options applied | linked textures: {', '.join(linked)}"
+            else:
+                self.status = "Options applied"
         except (ValueError, KeyError):
             self.status = "Invalid setting value"
 
