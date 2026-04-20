@@ -791,6 +791,10 @@ class TeachingApp:
 
         self._draw_track(track_rect)
         self._draw_side(side_rect)
+        if self.context_menu_open:
+            self._draw_context_menu()
+        if self.options_open:
+            self._draw_options_modal()
         pygame.display.flip()
 
     def _draw_hud(self, rect: pygame.Rect) -> None:
@@ -844,6 +848,8 @@ class TeachingApp:
         if self.panel_texture is not None:
             panel = pygame.transform.smoothscale(self.panel_texture, (rect.width, rect.height))
             self.screen.blit(panel, rect.topleft)
+        else:
+            pygame.draw.rect(self.screen, PANEL, rect, border_radius=10)
         y = rect.y + 20
         lines = [
             f"Track: {self.track_def.name}",
@@ -858,20 +864,75 @@ class TeachingApp:
             self.screen.blit(self.small.render(line, True, TEXT), (rect.x + 12, y))
             y += 24
 
+        y += 8
+        btn_w = 152
+        gap = 10
+        x1 = rect.x + 12
+        x2 = x1 + btn_w + gap
+        self._draw_button("Pause/Run", "pause", x1, y, btn_w)
+        self._draw_button("Step Once", "step_once", x2, y, btn_w)
+        y += 38
+        self._draw_button("Reset Attempt", "reset", x1, y, btn_w)
+        self._draw_button("Reset App", "reset_all", x2, y, btn_w)
+        y += 38
+        self._draw_button("Train Batch", "train", x1, y, btn_w)
+        self._draw_button("Continuous", "continuous", x2, y, btn_w)
+        y += 38
+        self._draw_button("Track Prev", "track_prev", x1, y, btn_w)
+        self._draw_button("Track Next", "track_next", x2, y, btn_w)
+        y += 38
+        self._draw_button("Speed -", "step_speed_down", x1, y, btn_w)
+        self._draw_button("Speed +", "step_speed_up", x2, y, btn_w)
+        y += 38
+        self._draw_button("Options", "options", x1, y, btn_w * 2 + gap)
+
     def _draw_help_button(self, action: str, label: str, x: int, y: int) -> None:
-        return
+        rect = pygame.Rect(x, y, 22, 22)
+        pygame.draw.rect(self.screen, (45, 58, 77), rect, border_radius=7)
+        pygame.draw.rect(self.screen, ACCENT, rect, width=1, border_radius=7)
+        text = self.small.render(label, True, ACCENT)
+        self.screen.blit(text, text.get_rect(center=rect.center))
+        self.buttons.append(UIButton(label, action, rect))
 
 
     def _draw_button(self, label: str, action: str, x: int, y: int, w: int) -> None:
-        return
+        rect = pygame.Rect(x, y, w, 30)
+        active = False
+        if action == "pause":
+            active = self.paused
+        elif action == "continuous":
+            active = self.continuous_training
+        fill = (45, 56, 72) if not active else (58, 85, 119)
+        border = (82, 122, 176) if active else (64, 76, 96)
+        pygame.draw.rect(self.screen, fill, rect, border_radius=8)
+        pygame.draw.rect(self.screen, border, rect, width=1, border_radius=8)
+        text = self.small.render(label, True, TEXT)
+        self.screen.blit(text, text.get_rect(center=rect.center))
+        self.buttons.append(UIButton(label, action, rect))
 
 
     def _draw_context_menu(self) -> None:
-        return
+        if not self.context_buttons:
+            return
+        union = self.context_buttons[0].rect.copy()
+        for btn in self.context_buttons[1:]:
+            union.union_ip(btn.rect)
+        menu = union.inflate(12, 12)
+        pygame.draw.rect(self.screen, PANEL, menu, border_radius=8)
+        pygame.draw.rect(self.screen, (90, 103, 127), menu, width=1, border_radius=8)
+        for btn in self.context_buttons:
+            pygame.draw.rect(self.screen, (45, 56, 72), btn.rect, border_radius=6)
+            pygame.draw.rect(self.screen, (68, 80, 100), btn.rect, width=1, border_radius=6)
+            text = self.small.render(btn.label, True, TEXT)
+            self.screen.blit(text, text.get_rect(center=btn.rect.center))
 
 
     def _draw_car_vector(self, center: tuple[int, int]) -> None:
-        return
+        heading = math.radians(self.agent.heading_deg)
+        tip = (center[0] + math.cos(heading) * 16, center[1] - math.sin(heading) * 16)
+        left = (center[0] + math.cos(heading + 2.5) * 10, center[1] - math.sin(heading + 2.5) * 10)
+        right = (center[0] + math.cos(heading - 2.5) * 10, center[1] - math.sin(heading - 2.5) * 10)
+        pygame.draw.polygon(self.screen, (80, 200, 140), [tip, left, right])
 
 
     def _draw_nn_graph(self, rect: pygame.Rect) -> None:
@@ -887,7 +948,71 @@ class TeachingApp:
 
 
     def _draw_options_modal(self) -> None:
-        return
+        keys: list[tuple[str, str, str]] = [
+            ("speed", "Speed", f"{self.config.speed:.2f}"),
+            ("turn_rate", "Turn rate", f"{self.config.max_turn_rate_deg:.1f}"),
+            ("sensor_range", "Sensor range", f"{self.config.sensor_max_range:.2f}"),
+            ("restart_delay", "Restart delay", f"{self.config.auto_restart_delay:.2f}"),
+            ("cycles", "Train cycles", str(self.training_rules.cycles)),
+            ("population", "Population", str(self.training_rules.population)),
+            ("mutation_strength", "Mutation", f"{self.training_rules.mutation_strength:.2f}"),
+            ("max_steps", "Max steps", str(self.training_rules.max_steps)),
+            ("sensor_count", "Sensor count", str(self.policy.sensor_count)),
+            ("sensor_spread", "Sensor spread", f"{self.sensor_spread_deg:.1f}"),
+            ("car_texture_path", "Car texture path", ""),
+            ("road_texture_path", "Road texture path", ""),
+            ("wall_texture_path", "Wall texture path", ""),
+            ("panel_texture_path", "Panel texture path", ""),
+        ]
+        modal = pygame.Rect(120, 70, 1040, 620)
+        pygame.draw.rect(self.screen, (21, 27, 36), modal, border_radius=14)
+        pygame.draw.rect(self.screen, (70, 82, 102), modal, width=1, border_radius=14)
+        title = self.big.render("Options", True, TEXT)
+        self.screen.blit(title, (modal.x + 20, modal.y + 12))
+
+        if not self.input_fields:
+            self.input_fields = []
+            x1, x2 = modal.x + 24, modal.x + 520
+            y = modal.y + 56
+            row_h = 34
+            for idx, (key, label, value) in enumerate(keys):
+                col_x = x1 if idx < 7 else x2
+                row_idx = idx if idx < 7 else idx - 7
+                rect = pygame.Rect(col_x + 190, y + row_idx * row_h, 290, 26)
+                self.input_fields.append(InputField(key, label, value, rect))
+            self.toggle_fields = [
+                ToggleField(
+                    "speed_control_heads",
+                    "Use accel/brake output heads",
+                    self.policy.accel_weights is not None and self.policy.brake_weights is not None,
+                    pygame.Rect(modal.x + 24, modal.bottom - 92, 330, 26),
+                )
+            ]
+            self.active_input = self.input_fields[0].key
+
+        for field in self.input_fields:
+            label = self.small.render(field.label, True, TEXT)
+            self.screen.blit(label, (field.rect.x - 180, field.rect.y + 4))
+            is_active = self.active_input == field.key
+            fill = (39, 48, 62) if not is_active else (53, 71, 97)
+            pygame.draw.rect(self.screen, fill, field.rect, border_radius=6)
+            pygame.draw.rect(self.screen, (95, 112, 138), field.rect, width=1, border_radius=6)
+            txt = self.small.render(field.value, True, TEXT)
+            self.screen.blit(txt, (field.rect.x + 8, field.rect.y + 4))
+
+        for toggle in self.toggle_fields:
+            pygame.draw.rect(self.screen, (33, 42, 56), toggle.rect, border_radius=6)
+            pygame.draw.rect(self.screen, (80, 96, 118), toggle.rect, width=1, border_radius=6)
+            check = "✓" if toggle.value else " "
+            checkbox = pygame.Rect(toggle.rect.x + 6, toggle.rect.y + 4, 18, 18)
+            pygame.draw.rect(self.screen, (15, 20, 26), checkbox, border_radius=4)
+            pygame.draw.rect(self.screen, (98, 118, 148), checkbox, width=1, border_radius=4)
+            self.screen.blit(self.small.render(check, True, GREEN), (checkbox.x + 4, checkbox.y))
+            label = self.small.render(toggle.label, True, TEXT)
+            self.screen.blit(label, (toggle.rect.x + 30, toggle.rect.y + 4))
+
+        self._draw_button("Apply", "apply_options", modal.right - 230, modal.bottom - 52, 96)
+        self._draw_button("Close", "close_options", modal.right - 124, modal.bottom - 52, 96)
 
 
     def _draw_nn_detail_modal(self) -> None:
