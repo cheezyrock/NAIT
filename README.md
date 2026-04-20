@@ -1,21 +1,45 @@
 # NAIT Teaching AI Simulator
 
-A classroom-focused local app for teaching how a **single-layer neural policy** drives using ray sensors.
+A classroom-focused desktop app for teaching how a **configurable neural policy network** controls a simulated car.
 
-## Highlights
+## Teaching-focused architecture
 
-- Cleaner simulation view with reduced visual clutter.
-- Attempt-history traces so students can watch training evolution over many failures.
-- Automatic restart after failure (default: 3 seconds, configurable).
-- Context menu + options modal (manual numeric entry for settings).
-- Updated figure-eight style track that avoids center-wall self-collision in 2D.
-- Start/finish lines span lane walls (track-width crossing).
+- Fully configurable feed-forward policy (`NeuralPolicy`) implemented manually in Python (no TensorFlow/PyTorch).
+- Arbitrary layer layouts supported:
+  - `[inputs, outputs]`
+  - `[inputs, hidden, outputs]`
+  - `[inputs, hidden1, hidden2, outputs]`
+- Multi-output policy actions:
+  - `steering`
+  - `throttle`
+  - `brake`
+- Simulator supports both:
+  - **constant-speed steering mode**
+  - **dynamic speed mode** with acceleration, braking, drag, and max speed constraints.
 
-## Core model
+## Visibility-first runtime data
 
-```text
-steering = tanh(bias + Σ(sensor[i] * weight[i]))
-```
+The app exposes the values needed for teaching and debugging:
+
+- sensor readings + hit distances
+- per-layer activations
+- raw network outputs
+- final bounded action outputs
+- current speed
+- acceleration and braking forces
+
+## Included instructional scenarios
+
+- **Steering-only constant speed**
+- **Speed-control wall lesson** (steering + throttle + brake)
+
+You can also open the in-app Options panel and reconfigure:
+
+- sensor count/spread/range
+- hidden layer sizes
+- enabled outputs (throttle/brake)
+- speed mode and dynamics parameters
+- evolutionary training settings
 
 ## Setup
 
@@ -32,13 +56,14 @@ python app.py
 ## Controls
 
 - `Space`: pause/resume
-- `R`: reset current attempt
+- `R`: reset episode
 - `N`: single-step one frame
 - `T` / `Y`: next / previous track
+- `M`: cycle scenarios
 - `G`: queue training batch
-- `C`: toggle continuous training
+- `C`: continuous training
 - `O`: open/close options modal
-- Right-click: open context menu
+- Right-click: context menu
 
 ## Attribution
 
