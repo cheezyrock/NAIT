@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import math
+import random
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Literal
@@ -18,59 +19,176 @@ Segment = tuple[Vec2, Vec2]
 
 
 @dataclass
-class LinearPolicy:
-    """Single-layer policy with no hidden nodes.
+class PolicyStep:
+    raw_outputs: dict[str, float]
+    actions: dict[str, float]
+    layer_activations: list[list[float]]
 
-    steering = tanh(bias + sum(sensor[i] * weight[i]))
+
+@dataclass
+class NeuralPolicy:
+    """Configurable fully-connected network policy.
+
+    Layer configuration examples:
+    - [inputs, outputs]
+    - [inputs, hidden, outputs]
+    - [inputs, hidden1, hidden2, outputs]
     """
 
     sensor_angles_deg: list[float]
-    weights: list[float]
-    bias: float = 0.0
+    action_names: list[str]
+    layer_sizes: list[int]
+    weights: list[list[list[float]]]
+    biases: list[list[float]]
+    hidden_activation: Literal["tanh", "relu"] = "tanh"
+    output_activation: Literal["tanh", "sigmoid", "linear"] = "tanh"
 
     def __post_init__(self) -> None:
         if len(self.sensor_angles_deg) == 0:
             raise ValueError("At least one sensor angle is required")
-        if len(self.sensor_angles_deg) != len(self.weights):
-            raise ValueError("sensor_angles_deg and weights must be the same length")
+        if len(self.action_names) == 0:
+            raise ValueError("At least one action output is required")
+        if len(self.layer_sizes) < 2:
+            raise ValueError("layer_sizes must include input and output")
+        if self.layer_sizes[0] != len(self.sensor_angles_deg):
+            raise ValueError("Input layer must match sensor count")
+        if self.layer_sizes[-1] != len(self.action_names):
+            raise ValueError("Output layer must match action count")
+        if len(self.weights) != len(self.layer_sizes) - 1:
+            raise ValueError("weights must have one matrix per layer transition")
+        if len(self.biases) != len(self.layer_sizes) - 1:
+            raise ValueError("biases must have one vector per layer transition")
+
+        for layer_index, (matrix, bias_vec) in enumerate(zip(self.weights, self.biases, strict=True)):
+            expected_out = self.layer_sizes[layer_index + 1]
+            expected_in = self.layer_sizes[layer_index]
+            if len(matrix) != expected_out:
+                raise ValueError(f"weights[{layer_index}] row count mismatch")
+            if len(bias_vec) != expected_out:
+                raise ValueError(f"biases[{layer_index}] size mismatch")
+            for row in matrix:
+                if len(row) != expected_in:
+                    raise ValueError(f"weights[{layer_index}] column count mismatch")
 
     @property
     def sensor_count(self) -> int:
         return len(self.sensor_angles_deg)
 
-    def forward(self, sensor_values: Iterable[float]) -> float:
-        sensor_values_list = list(sensor_values)
-        if len(sensor_values_list) != self.sensor_count:
+    def clone(self) -> "NeuralPolicy":
+        return NeuralPolicy(
+            sensor_angles_deg=list(self.sensor_angles_deg),
+            action_names=list(self.action_names),
+            layer_sizes=list(self.layer_sizes),
+            weights=[[list(row) for row in layer] for layer in self.weights],
+            biases=[list(layer_bias) for layer_bias in self.biases],
+            hidden_activation=self.hidden_activation,
+            output_activation=self.output_activation,
+        )
+
+    def mutate(self, mutation_rate: float, mutation_strength: float) -> None:
+        for layer in self.weights:
+            for row in layer:
+                for idx, value in enumerate(row):
+                    if random.random() < mutation_rate:
+                        row[idx] = value + random.uniform(-mutation_strength, mutation_strength)
+        for bias_layer in self.biases:
+            for idx, value in enumerate(bias_layer):
+                if random.random() < mutation_rate:
+                    bias_layer[idx] = value + random.uniform(-mutation_strength, mutation_strength)
+
+    def forward(self, sensor_values: Iterable[float]) -> PolicyStep:
+        input_values = list(sensor_values)
+        if len(input_values) != self.sensor_count:
             raise ValueError("sensor_values length must match sensor count")
 
-        steering_raw = self.bias
-        for value, weight in zip(sensor_values_list, self.weights, strict=True):
-            steering_raw += value * weight
+        activations = input_values
+        layer_activations: list[list[float]] = [list(activations)]
 
-        return math.tanh(steering_raw)
+        for layer_index, (matrix, bias_vec) in enumerate(zip(self.weights, self.biases, strict=True)):
+            is_output_layer = layer_index == len(self.weights) - 1
+            next_values: list[float] = []
+            for neuron_weights, bias in zip(matrix, bias_vec, strict=True):
+                total = bias
+                for value, weight in zip(activations, neuron_weights, strict=True):
+                    total += value * weight
+                if is_output_layer:
+                    next_values.append(self._activate_output(total))
+                else:
+                    next_values.append(self._activate_hidden(total))
+            activations = next_values
+            layer_activations.append(list(activations))
+
+        raw_outputs = {
+            action_name: activations[idx]
+            for idx, action_name in enumerate(self.action_names)
+        }
+
+        actions = {
+            "steering": clamp(raw_outputs.get("steering", 0.0), -1.0, 1.0),
+            "throttle": clamp(raw_outputs.get("throttle", 0.0), 0.0, 1.0),
+            "brake": clamp(raw_outputs.get("brake", 0.0), 0.0, 1.0),
+        }
+        return PolicyStep(raw_outputs=raw_outputs, actions=actions, layer_activations=layer_activations)
+
+    def _activate_hidden(self, value: float) -> float:
+        if self.hidden_activation == "relu":
+            return max(0.0, value)
+        return math.tanh(value)
+
+    def _activate_output(self, value: float) -> float:
+        if self.output_activation == "linear":
+            return value
+        if self.output_activation == "sigmoid":
+            return 1.0 / (1.0 + math.exp(-value))
+        return math.tanh(value)
 
     def to_dict(self) -> dict:
         return {
             "sensorAnglesDeg": self.sensor_angles_deg,
+            "actionNames": self.action_names,
+            "layerSizes": self.layer_sizes,
             "weights": self.weights,
-            "bias": self.bias,
+            "biases": self.biases,
+            "hiddenActivation": self.hidden_activation,
+            "outputActivation": self.output_activation,
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "LinearPolicy":
+    def from_dict(cls, data: dict) -> "NeuralPolicy":
         return cls(
             sensor_angles_deg=list(data["sensorAnglesDeg"]),
-            weights=list(data["weights"]),
-            bias=float(data.get("bias", 0.0)),
+            action_names=list(data["actionNames"]),
+            layer_sizes=list(data["layerSizes"]),
+            weights=[[[float(v) for v in row] for row in layer] for layer in data["weights"]],
+            biases=[[float(v) for v in layer] for layer in data["biases"]],
+            hidden_activation=data.get("hiddenActivation", "tanh"),
+            output_activation=data.get("outputActivation", "tanh"),
         )
 
     def save_json(self, path: str | Path) -> None:
         Path(path).write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
 
     @classmethod
-    def load_json(cls, path: str | Path) -> "LinearPolicy":
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
-        return cls.from_dict(data)
+    def load_json(cls, path: str | Path) -> "NeuralPolicy":
+        return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
+
+
+@dataclass
+class VehicleDynamicsConfig:
+    speed_mode: Literal["constant", "dynamic"] = "constant"
+    constant_speed: float = 2.0
+    min_speed: float = 0.0
+    max_speed: float = 6.0
+    acceleration_rate: float = 2.3
+    brake_rate: float = 3.2
+    drag: float = 0.25
+
+
+@dataclass
+class ActionCommand:
+    steering: float = 0.0
+    throttle: float = 0.0
+    brake: float = 0.0
 
 
 def clamp(value: float, min_value: float, max_value: float) -> float:
@@ -172,23 +290,45 @@ class SensorArray:
 class CarAgent:
     position: Vec2
     heading_deg: float
-    speed: float
     max_turn_rate_deg: float
+    dynamics: VehicleDynamicsConfig
+    speed: float = 0.0
     collision_radius: float = 0.1
     alive: bool = True
     time_alive: float = 0.0
     distance_traveled: float = 0.0
+    last_acceleration: float = 0.0
+    last_brake_force: float = 0.0
     path_trace: list[Vec2] = field(default_factory=list)
 
     def __post_init__(self) -> None:
+        if self.dynamics.speed_mode == "constant":
+            self.speed = self.dynamics.constant_speed
+        else:
+            self.speed = clamp(self.speed, self.dynamics.min_speed, self.dynamics.max_speed)
         self.path_trace.append(self.position)
 
-    def step(self, steering: float, dt: float) -> None:
+    def step(self, command: ActionCommand, dt: float) -> None:
         if not self.alive:
             return
 
-        steering = clamp(steering, -1.0, 1.0)
+        steering = clamp(command.steering, -1.0, 1.0)
         self.heading_deg += steering * self.max_turn_rate_deg * dt
+
+        if self.dynamics.speed_mode == "constant":
+            self.last_acceleration = 0.0
+            self.last_brake_force = 0.0
+            self.speed = self.dynamics.constant_speed
+        else:
+            throttle = clamp(command.throttle, 0.0, 1.0)
+            brake = clamp(command.brake, 0.0, 1.0)
+            accel_force = throttle * self.dynamics.acceleration_rate
+            brake_force = brake * self.dynamics.brake_rate
+            drag_force = self.speed * self.dynamics.drag
+            net = accel_force - brake_force - drag_force
+            self.speed = clamp(self.speed + net * dt, self.dynamics.min_speed, self.dynamics.max_speed)
+            self.last_acceleration = accel_force
+            self.last_brake_force = brake_force
 
         angle = math.radians(self.heading_deg)
         dx = math.cos(angle) * self.speed * dt
@@ -202,19 +342,34 @@ class CarAgent:
 
 
 @dataclass
+class StepSnapshot:
+    sensor_readings: list[float]
+    sensor_hit_distances: list[float | None]
+    layer_activations: list[list[float]]
+    raw_outputs: dict[str, float]
+    actions: dict[str, float]
+    speed: float
+    acceleration: float
+    brake_force: float
+    heading_deg: float
+
+
+@dataclass
 class SimulationResult:
     survived_seconds: float
     distance_traveled: float
     cause_of_death: Literal["collision", "timeout", "alive"]
     path_trace: list[Vec2]
+    final_snapshot: StepSnapshot | None
 
 
 @dataclass
 class Simulator:
     track: Track
-    policy: LinearPolicy
+    policy: NeuralPolicy
     agent: CarAgent
     sensor_array: SensorArray
+    latest_snapshot: StepSnapshot | None = None
 
     def run(self, max_steps: int, dt: float) -> SimulationResult:
         cause: Literal["collision", "timeout", "alive"] = "alive"
@@ -224,17 +379,11 @@ class Simulator:
                 cause = "collision"
                 break
 
-            sensor_values = self.sensor_array.read(
-                position=self.agent.position,
-                heading_deg=self.agent.heading_deg,
-                track=self.track,
-            )
-            steering = self.policy.forward(sensor_values)
-            self.agent.step(steering=steering, dt=dt)
-
+            snapshot = self.step(dt)
             if self._is_colliding(self.agent.position):
                 self.agent.alive = False
                 cause = "collision"
+                self.latest_snapshot = snapshot
                 break
         else:
             cause = "timeout"
@@ -244,7 +393,37 @@ class Simulator:
             distance_traveled=self.agent.distance_traveled,
             cause_of_death=cause,
             path_trace=list(self.agent.path_trace),
+            final_snapshot=self.latest_snapshot,
         )
+
+    def step(self, dt: float) -> StepSnapshot:
+        scan = self.sensor_array.read_with_distances(
+            position=self.agent.position,
+            heading_deg=self.agent.heading_deg,
+            track=self.track,
+        )
+        sensor_values = [reading for reading, _ in scan]
+        step = self.policy.forward(sensor_values)
+        command = ActionCommand(
+            steering=step.actions["steering"],
+            throttle=step.actions["throttle"],
+            brake=step.actions["brake"],
+        )
+        self.agent.step(command=command, dt=dt)
+
+        snapshot = StepSnapshot(
+            sensor_readings=sensor_values,
+            sensor_hit_distances=[dist for _, dist in scan],
+            layer_activations=step.layer_activations,
+            raw_outputs=step.raw_outputs,
+            actions=step.actions,
+            speed=self.agent.speed,
+            acceleration=self.agent.last_acceleration,
+            brake_force=self.agent.last_brake_force,
+            heading_deg=self.agent.heading_deg,
+        )
+        self.latest_snapshot = snapshot
+        return snapshot
 
     def _is_colliding(self, position: Vec2) -> bool:
         return any(
@@ -262,3 +441,24 @@ def build_rect_track(width: float = 10.0, height: float = 6.0) -> Track:
         ((0.0, height), (0.0, 0.0)),
     ]
     return Track.from_segments(segments)
+
+
+def random_policy(
+    sensor_angles_deg: list[float],
+    action_names: list[str],
+    hidden_layers: list[int] | None = None,
+) -> NeuralPolicy:
+    hidden_layers = hidden_layers or []
+    layer_sizes = [len(sensor_angles_deg), *hidden_layers, len(action_names)]
+    weights: list[list[list[float]]] = []
+    biases: list[list[float]] = []
+    for in_size, out_size in zip(layer_sizes[:-1], layer_sizes[1:], strict=True):
+        weights.append([[random.uniform(-1.0, 1.0) for _ in range(in_size)] for _ in range(out_size)])
+        biases.append([random.uniform(-0.2, 0.2) for _ in range(out_size)])
+    return NeuralPolicy(
+        sensor_angles_deg=sensor_angles_deg,
+        action_names=action_names,
+        layer_sizes=layer_sizes,
+        weights=weights,
+        biases=biases,
+    )
