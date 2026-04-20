@@ -35,16 +35,25 @@ python app.py
 - `Space` pause/resume
 - `R` reset current run
 - `N` single-step one frame
-- `T` switch to next built-in track
+- `T` / `Y` switch to next/previous built-in track
 - `1 / 2 / 3` load bad/decent/good policy presets
 - `G` quick training pass (`20` cycles)
 - `H` deeper training pass (`60` cycles)
+- `C` toggle continuous training (runs 1-cycle mini-rounds repeatedly)
 - `[` / `]` decrease/increase speed
 - `-` / `=` decrease/increase max turn rate
+- `<` / `>` decrease/increase sensor count
+- `;` / `'` decrease/increase sensor spread
+- `S` show/hide optional speed controls in UI
+- `A` show/hide acceleration model behavior
+- `M` simple mode toggle (hides neural math panel by default)
+
+All key features also have clickable mouse buttons in the right-side control panel.
 
 ## Tracks
 
 Built-in demos include:
+- `oval_racetrack` (default)
 - `rectangle`
 - `chicane`
 - `slalom`
