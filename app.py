@@ -926,6 +926,28 @@ class TeachingApp:
         self._draw_nn_graph(pygame.Rect(x, y, rect.width - 28, rect.bottom - y - 10))
         self.screen.blit(self.small.render("Tip: every ⓘ stat and ? button is clickable help", True, MUTED), (x, rect.bottom - 24))
 
+        y += 8
+        btn_w = 152
+        gap = 10
+        x1 = rect.x + 12
+        x2 = x1 + btn_w + gap
+        self._draw_button("Pause/Run", "pause", x1, y, btn_w)
+        self._draw_button("Step Once", "step_once", x2, y, btn_w)
+        y += 38
+        self._draw_button("Reset Attempt", "reset", x1, y, btn_w)
+        self._draw_button("Reset App", "reset_all", x2, y, btn_w)
+        y += 38
+        self._draw_button("Train Batch", "train", x1, y, btn_w)
+        self._draw_button("Continuous", "continuous", x2, y, btn_w)
+        y += 38
+        self._draw_button("Track Prev", "track_prev", x1, y, btn_w)
+        self._draw_button("Track Next", "track_next", x2, y, btn_w)
+        y += 38
+        self._draw_button("Speed -", "step_speed_down", x1, y, btn_w)
+        self._draw_button("Speed +", "step_speed_up", x2, y, btn_w)
+        y += 38
+        self._draw_button("Options", "options", x1, y, btn_w * 2 + gap)
+
     def _draw_help_button(self, action: str, label: str, x: int, y: int) -> None:
         rect = pygame.Rect(x, y, 18, 18)
         self.buttons.append(UIButton(label, action, rect))
