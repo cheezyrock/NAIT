@@ -785,32 +785,78 @@ class TeachingApp:
     def _render(self) -> None:
         self.screen.fill(BG)
         track_rect = pygame.Rect(14, 70, 900, 676)
+        hud_rect = pygame.Rect(14, 12, 1252, 50)
         side_rect = pygame.Rect(926, 70, 340, 676)
         self.buttons = []
         self.nn_hitboxes = []
 
+        pygame.draw.rect(self.screen, PANEL, hud_rect, border_radius=12)
+        pygame.draw.rect(self.screen, (12, 16, 22), track_rect, border_radius=12)
+        pygame.draw.rect(self.screen, PANEL, side_rect, border_radius=12)
+
         self._draw_track(track_rect)
+        self._draw_hud(hud_rect)
         self._draw_side(side_rect)
+        if self.context_menu_open:
+            self._draw_context_menu()
+        if self.options_open:
+            self._draw_options_modal()
+        if self.stat_help_key is not None:
+            self._draw_stat_help_modal()
+        if self.section_help_key is not None:
+            self._draw_section_help_modal()
+        if self.nn_detail is not None:
+            self._draw_nn_detail_modal()
         pygame.display.flip()
 
     def _draw_hud(self, rect: pygame.Rect) -> None:
-        return
+        self.stat_chips = []
+        stats = [
+            ("track", "Track", self.track_def.name),
+            ("attempts", "Attempts", str(self.attempts_total)),
+            ("laps", "Laps", str(self.lap_count)),
+            ("fitness", "Fitness", f"{self.last_fitness:.2f}"),
+            ("train", "Training", str(self.total_training_cycles)),
+        ]
+        x = rect.x + 12
+        for key, label, value in stats:
+            chip_text = f"{label}: {value}  ⓘ"
+            w = max(120, self.font.size(chip_text)[0] + 18)
+            chip = pygame.Rect(x, rect.y + 9, w, 32)
+            pygame.draw.rect(self.screen, (38, 48, 62), chip, border_radius=10)
+            pygame.draw.rect(self.screen, (89, 107, 136), chip, 1, border_radius=10)
+            self.screen.blit(self.font.render(chip_text, True, TEXT), (chip.x + 10, chip.y + 7))
+            self.stat_chips.append(StatChip(key, label, value, chip))
+            x += w + 10
+
+        button_y = rect.y + 10
+        right = rect.right - 12
+        self._draw_button("Reset All", "reset_all", right - 120, button_y, 108)
+        self._draw_button("Track ▶", "track_next", right - 232, button_y, 100)
+        self._draw_button("Track ◀", "track_prev", right - 344, button_y, 100)
 
     def _draw_track(self, rect: pygame.Rect) -> None:
+        road = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
+        for idx, attempt in enumerate(self.attempt_history[-70:]):
+            if len(attempt.path) < 2:
+                continue
+            alpha_ratio = (idx + 1) / 70.0
+            color = (60, int(80 + 90 * alpha_ratio), int(110 + 120 * alpha_ratio))
+            pts = [self._to_screen(p, rect) for p in attempt.path]
+            pygame.draw.lines(self.screen, color, False, pts, 1)
+
         if self.road_texture:
             tile = pygame.transform.smoothscale(self.road_texture, (180, 180))
-            for tx in range(rect.x, rect.right, 180):
-                for ty in range(rect.y, rect.bottom, 180):
+            for tx in range(rect.x + 8, rect.right - 8, 180):
+                for ty in range(rect.y + 8, rect.bottom - 8, 180):
                     self.screen.blit(tile, (tx, ty))
-        else:
-            pygame.draw.rect(self.screen, (20, 24, 32), rect, border_radius=12)
 
         for seg in self.track_def.track.wall_segments:
-            p1 = self._to_screen(seg[0], rect)
-            p2 = self._to_screen(seg[1], rect)
-            self._blit_segment_texture(self.wall_texture, p1, p2, 18)
-            if self.wall_texture is None:
-                pygame.draw.line(self.screen, (220, 231, 248), p1, p2, 3)
+            p1, p2 = self._to_screen(seg[0], rect), self._to_screen(seg[1], rect)
+            pygame.draw.line(self.screen, (64, 64, 64, 180), (p1[0] - rect.x, p1[1] - rect.y), (p2[0] - rect.x, p2[1] - rect.y), 18)
+            pygame.draw.line(self.screen, (220, 231, 248), p1, p2, 3)
+            pygame.draw.line(self.screen, (238, 224, 140), p1, p2, 1)
+        self.screen.blit(road, (rect.x, rect.y))
 
         start_a = self._to_screen(self.track_def.start_line[0], rect)
         start_b = self._to_screen(self.track_def.start_line[1], rect)
@@ -822,14 +868,12 @@ class TeachingApp:
 
         car = self._to_screen(self.agent.position, rect)
         if self.car_sprite:
-            sprite = pygame.transform.rotozoom(self.car_sprite, self.agent.heading_deg - 90.0, 0.34)
+            sprite = pygame.transform.rotozoom(self.car_sprite, self.agent.heading_deg - 90.0, 0.36)
+            if not self.agent.alive:
+                sprite.fill((180, 80, 80, 190), special_flags=pygame.BLEND_RGBA_MULT)
             self.screen.blit(sprite, sprite.get_rect(center=car))
         else:
             self._draw_car_vector(car)
-        if not self.agent.alive:
-            x_size = 16
-            pygame.draw.line(self.screen, RED, (car[0] - x_size, car[1] - x_size), (car[0] + x_size, car[1] + x_size), 5)
-            pygame.draw.line(self.screen, RED, (car[0] - x_size, car[1] + x_size), (car[0] + x_size, car[1] - x_size), 5)
         angle = math.radians(self.agent.heading_deg)
         nose = (int(car[0] + math.cos(angle) * 17), int(car[1] - math.sin(angle) * 17))
         pygame.draw.line(self.screen, (255, 217, 107), car, nose, 3)
@@ -841,57 +885,296 @@ class TeachingApp:
             pygame.draw.line(self.screen, (94, 155, 235), car, self._to_screen(end_w, rect), 1)
 
     def _draw_side(self, rect: pygame.Rect) -> None:
-        if self.panel_texture is not None:
-            panel = pygame.transform.smoothscale(self.panel_texture, (rect.width, rect.height))
-            self.screen.blit(panel, rect.topleft)
-        y = rect.y + 20
+        x, y = rect.x + 14, rect.y + 14
+        status_lines = self._wrap_text(f"Status: {self.status}", rect.width - 28)[:4]
+        while len(status_lines) < 4:
+            status_lines.append("")
+        for line in status_lines:
+            self.screen.blit(self.font.render(line, True, MUTED), (x, y))
+            y += 20
+        y += 8
         lines = [
-            f"Track: {self.track_def.name}",
-            f"Status: {self.status}",
-            f"Phase: {self.phase}",
+            f"Current phase: {self.phase}",
             f"Alive: {self.agent.alive}",
             f"Speed: {self.agent.speed:.2f}",
-            f"Fitness: {self.last_fitness:.2f}",
-            "Controls: SPACE pause, R reset, T/Y track, G train",
+            f"Steer: {self.last_steering:+.3f}",
+            f"Accel/Brake heads: {'on' if self.policy.accel_weights is not None else 'off'}",
+            f"Auto-restart delay: {self.config.auto_restart_delay:.1f}s",
         ]
-        for line in lines:
-            self.screen.blit(self.small.render(line, True, TEXT), (rect.x + 12, y))
+        for t in lines:
+            self.screen.blit(self.font.render(t, True, TEXT), (x, y))
             y += 24
+        y += 8
+        self._draw_button("Pause/Run", "pause", x, y, 150)
+        self._draw_button("Restart", "reset", x + 160, y, 150)
+        y += 36
+        self._draw_button("Train Batch", "train", x, y, 150)
+        self._draw_button("Continuous", "continuous", x + 160, y, 150)
+        y += 36
+        self._draw_button("Options", "options", x, y, 150)
+        self._draw_button("Step Once", "step_once", x + 160, y, 150)
+        y += 36
+        self._draw_button("Speed -", "step_speed_down", x, y, 94)
+        self._draw_button(f"x{self.config.step_multiplier:g}", "noop", x + 102, y, 104)
+        self._draw_button("Speed +", "step_speed_up", x + 214, y, 96)
+        y += 42
+        self._draw_help_button("help_controls", "?", rect.right - 30, rect.y + 86)
+        self._draw_help_button("help_train", "?", rect.right - 30, rect.y + 122)
+        self._draw_help_button("help_phase", "?", rect.right - 30, rect.y + 46)
+        self._draw_help_button("help_speed", "?", rect.right - 30, rect.y + 158)
+        self._draw_help_button("help_nn", "?", rect.right - 30, y + 8)
+        self._draw_nn_graph(pygame.Rect(x, y, rect.width - 28, rect.bottom - y - 10))
+        self.screen.blit(self.small.render("Tip: every ⓘ stat and ? button is clickable help", True, MUTED), (x, rect.bottom - 24))
 
     def _draw_help_button(self, action: str, label: str, x: int, y: int) -> None:
-        return
+        rect = pygame.Rect(x, y, 18, 18)
+        self.buttons.append(UIButton(label, action, rect))
+        pygame.draw.rect(self.screen, (61, 74, 94), rect, border_radius=9)
+        pygame.draw.rect(self.screen, ACCENT, rect, 1, border_radius=9)
+        self.screen.blit(self.small.render(label, True, TEXT), (x + 6, y + 1))
 
 
     def _draw_button(self, label: str, action: str, x: int, y: int, w: int) -> None:
-        return
+        rect = pygame.Rect(x, y, w, 30)
+        self.buttons.append(UIButton(label, action, rect))
+        active = action == "continuous" and self.continuous_training
+        if action == "noop":
+            color = (38, 48, 63)
+        else:
+            color = (48, 115, 84) if active else (60, 74, 95)
+        pygame.draw.rect(self.screen, color, rect, border_radius=7)
+        pygame.draw.rect(self.screen, (115, 131, 159), rect, 1, border_radius=7)
+        self.screen.blit(self.small.render(label, True, TEXT), (x + 10, y + 8))
 
 
     def _draw_context_menu(self) -> None:
-        return
+        if not self.context_buttons:
+            return
+        bounds = self.context_buttons[0].rect.unionall([b.rect for b in self.context_buttons])
+        bg = bounds.inflate(8, 8)
+        pygame.draw.rect(self.screen, (18, 24, 33), bg, border_radius=6)
+        pygame.draw.rect(self.screen, (95, 108, 133), bg, 1, border_radius=6)
+        for btn in self.context_buttons:
+            pygame.draw.rect(self.screen, (53, 65, 83), btn.rect, border_radius=4)
+            self.screen.blit(self.small.render(btn.label, True, TEXT), (btn.rect.x + 8, btn.rect.y + 5))
 
 
     def _draw_car_vector(self, center: tuple[int, int]) -> None:
-        return
+        cx, cy = center
+        ang = math.radians(self.agent.heading_deg)
+        forward = (math.cos(ang), -math.sin(ang))
+        right = (math.cos(ang + math.pi / 2), -math.sin(ang + math.pi / 2))
+        body = [
+            (cx + int(forward[0] * 15), cy + int(forward[1] * 15)),
+            (cx + int(right[0] * 8 - forward[0] * 10), cy + int(right[1] * 8 - forward[1] * 10)),
+            (cx - int(forward[0] * 13), cy - int(forward[1] * 13)),
+            (cx - int(right[0] * 8 + forward[0] * 10), cy - int(right[1] * 8 + forward[1] * 10)),
+        ]
+        pygame.draw.polygon(self.screen, (33, 166, 116) if self.agent.alive else (168, 83, 83), body)
+        pygame.draw.polygon(self.screen, (12, 24, 30), body, 2)
 
 
     def _draw_nn_graph(self, rect: pygame.Rect) -> None:
-        return
+        pygame.draw.rect(self.screen, (21, 27, 36), rect, border_radius=8)
+        pygame.draw.rect(self.screen, (84, 100, 126), rect, 1, border_radius=8)
+        self.screen.blit(self.small.render("Neural Net (live activations)", True, TEXT), (rect.x + 8, rect.y + 8))
+        sx = rect.x + 20
+        hx = rect.centerx
+        ox = rect.right - 34
+        sensors = self.nn_activations.get("sensor", [])
+        hidden = self.nn_activations.get("hidden", [])
+        outputs: list[tuple[str, float, list[float] | None]] = [("Steer", self.nn_outputs.get("steering", 0.0), self.policy.steering_weights)]
+        if self.policy.accel_weights is not None:
+            outputs.append(("Accel", self.nn_outputs.get("accel", 0.0), self.policy.accel_weights))
+        if self.policy.brake_weights is not None:
+            outputs.append(("Brake", self.nn_outputs.get("brake", 0.0), self.policy.brake_weights))
+
+        def y_positions(count: int) -> list[int]:
+            if count <= 1:
+                return [rect.centery]
+            gap = (rect.height - 48) / (count - 1)
+            return [int(rect.y + 28 + idx * gap) for idx in range(count)]
+
+        sy, hy, oy = y_positions(len(sensors)), y_positions(len(hidden)), y_positions(len(outputs))
+        for s_idx, y1 in enumerate(sy):
+            for h_idx, y2 in enumerate(hy):
+                weight = self.policy.hidden_weights[h_idx][s_idx]
+                contribution = sensors[s_idx] * weight
+                intensity = min(1.0, abs(contribution))
+                color = (int(80 + intensity * 160), int(70 + intensity * 130), int(90 + (1 if contribution >= 0 else 0) * 110))
+                pygame.draw.line(self.screen, color, (sx, y1), (hx, y2), 2 if intensity > 0.2 else 1)
+                mid = pygame.Rect((sx + hx) // 2 - 5, (y1 + y2) // 2 - 5, 10, 10)
+                self.nn_hitboxes.append(
+                    (
+                        mid,
+                        f"Edge Sensor {s_idx + 1} → Hidden {h_idx + 1}",
+                        {
+                            "Weight": f"{weight:+.4f}",
+                            "Sensor value": f"{sensors[s_idx]:.4f}",
+                            "Contribution": f"{contribution:+.4f}",
+                        },
+                    )
+                )
+        for h_idx, y1 in enumerate(hy):
+            for o_idx, (name, _, out_weights) in enumerate(outputs):
+                if out_weights is None:
+                    continue
+                y2 = oy[o_idx]
+                weight = out_weights[h_idx]
+                contribution = hidden[h_idx] * weight
+                intensity = min(1.0, abs(contribution))
+                color = (int(80 + intensity * 160), int(70 + intensity * 130), int(90 + (1 if contribution >= 0 else 0) * 110))
+                pygame.draw.line(self.screen, color, (hx, y1), (ox, y2), 2 if intensity > 0.2 else 1)
+                mid = pygame.Rect((hx + ox) // 2 - 5, (y1 + y2) // 2 - 5, 10, 10)
+                self.nn_hitboxes.append(
+                    (
+                        mid,
+                        f"Edge Hidden {h_idx + 1} → {name}",
+                        {
+                            "Weight": f"{weight:+.4f}",
+                            "Hidden value": f"{hidden[h_idx]:+.4f}",
+                            "Contribution": f"{contribution:+.4f}",
+                        },
+                    )
+                )
+
+        for idx, value in enumerate(sensors):
+            intensity = min(1.0, abs(value))
+            color = (int(90 + intensity * 140), int(110 + intensity * 130), 230)
+            center = (sx, sy[idx])
+            pygame.draw.circle(self.screen, color, center, 7)
+            node_rect = pygame.Rect(center[0] - 10, center[1] - 10, 20, 20)
+            self.nn_hitboxes.append((node_rect, f"Sensor {idx + 1}", {"Activation": f"{value:.4f}", "Angle": f"{self.policy.sensor_angles_deg[idx]:+.1f}°"}))
+        for idx, value in enumerate(hidden):
+            magnitude = abs(value)
+            color = (int(120 + 120 * magnitude), 90, int(100 + (1 if value > 0 else 0) * 120))
+            center = (hx, hy[idx])
+            pygame.draw.circle(self.screen, color, center, 8)
+            node_rect = pygame.Rect(center[0] - 10, center[1] - 10, 20, 20)
+            self.nn_hitboxes.append((node_rect, f"Hidden {idx + 1}", {"Activation": f"{value:+.4f}", "Bias": f"{self.policy.hidden_biases[idx]:+.4f}"}))
+        for idx, (name, value, _) in enumerate(outputs):
+            color = (60, int(110 + min(1.0, abs(value)) * 130), 130)
+            center = (ox, oy[idx])
+            pygame.draw.circle(self.screen, color, center, 9)
+            node_rect = pygame.Rect(center[0] - 11, center[1] - 11, 22, 22)
+            self.nn_hitboxes.append((node_rect, f"{name} output", {"Activation": f"{value:+.4f}"}))
+            self.screen.blit(self.small.render(name, True, MUTED), (ox - 28, oy[idx] - 20))
 
 
     def _draw_stat_help_modal(self) -> None:
-        return
+        if self.stat_help_key is None:
+            return
+        help_text = {
+            "track": "Track is the road layout the AI car is practicing on.",
+            "attempts": "Attempts are how many full tries the car has made so far.",
+            "laps": "Laps count each time the car crosses the start line in the correct direction.",
+            "fitness": "Fitness is the current score. Higher means the car survived and drove farther.",
+            "train": "Training cycles are rounds where many AI versions are tested and improved.",
+        }
+        modal = pygame.Rect(280, 220, 720, 220)
+        pygame.draw.rect(self.screen, (10, 14, 20), modal, border_radius=12)
+        pygame.draw.rect(self.screen, ACCENT, modal, 2, border_radius=12)
+        title = self.stat_help_key.capitalize()
+        self.screen.blit(self.big.render(f"{title}: what it means", True, TEXT), (modal.x + 20, modal.y + 20))
+        for idx, line in enumerate(self._wrap_text(help_text.get(self.stat_help_key, "No help available."), modal.width - 40)):
+            self.screen.blit(self.font.render(line, True, MUTED), (modal.x + 20, modal.y + 70 + idx * 24))
+        self.screen.blit(self.small.render("Click anywhere to close", True, ACCENT), (modal.x + 20, modal.bottom - 28))
 
 
     def _draw_section_help_modal(self) -> None:
-        return
+        if self.section_help_key is None:
+            return
+        help_text = {
+            "controls": "Controls run or pause the sim, restart the current attempt, and step one frame at a time for debugging.",
+            "train": "Train Batch runs the configured number of training cycles immediately. Each cycle evaluates a population, keeps the best, mutates offspring, and replaces the active policy with the top performer.",
+            "phase": "Phase shows Sense → Think → Act → Learn. It updates each frame so you can see what the AI is doing now.",
+            "speed": "Speed controls simulation step rate from 0.25x to 32x. Use - and + to halve/double speed for careful inspection or fast iteration.",
+            "nn": "Neural net view shows live node and edge activity. Click any node/edge to inspect role, weight, contribution, and current activation.",
+        }
+        modal = pygame.Rect(300, 180, 680, 240)
+        pygame.draw.rect(self.screen, (10, 14, 20), modal, border_radius=12)
+        pygame.draw.rect(self.screen, GREEN, modal, 2, border_radius=12)
+        title = self.section_help_key.capitalize()
+        self.screen.blit(self.big.render(f"{title}: simple help", True, TEXT), (modal.x + 20, modal.y + 20))
+        for idx, line in enumerate(self._wrap_text(help_text.get(self.section_help_key, "No help available."), modal.width - 40)):
+            self.screen.blit(self.font.render(line, True, MUTED), (modal.x + 20, modal.y + 72 + idx * 24))
+        self.screen.blit(self.small.render("Click anywhere to close", True, GREEN), (modal.x + 20, modal.bottom - 28))
 
 
     def _draw_options_modal(self) -> None:
-        return
+        modal = pygame.Rect(220, 80, 840, 600)
+        pygame.draw.rect(self.screen, (10, 14, 20), modal, border_radius=12)
+        pygame.draw.rect(self.screen, (114, 129, 157), modal, 1, border_radius=12)
+        self.screen.blit(self.big.render("Options", True, TEXT), (modal.x + 20, modal.y + 16))
+
+        field_defs = [
+            ("speed", "Speed", f"{self.config.speed:.2f}"),
+            ("turn_rate", "Turn rate deg/s", f"{self.config.max_turn_rate_deg:.1f}"),
+            ("sensor_range", "Sensor range", f"{self.config.sensor_max_range:.2f}"),
+            ("sensor_count", "Sensor count", str(self.policy.sensor_count)),
+            ("sensor_spread", "Sensor spread deg", f"{self.sensor_spread_deg:.0f}"),
+            ("restart_delay", "Auto restart sec", f"{self.config.auto_restart_delay:.1f}"),
+            ("cycles", "Training cycles", str(self.training_rules.cycles)),
+            ("population", "Population", str(self.training_rules.population)),
+            ("mutation_strength", "Mutation strength", f"{self.training_rules.mutation_strength:.2f}"),
+            ("max_steps", "Max steps", str(self.training_rules.max_steps)),
+            ("car_texture_path", "Car texture path", ""),
+            ("road_texture_path", "Road texture path", ""),
+            ("wall_texture_path", "Wall texture path", ""),
+            ("panel_texture_path", "Panel texture path", ""),
+        ]
+        toggle_defs = [
+            ("speed_control_heads", "Enable acceleration + braking heads", self.policy.accel_weights is not None),
+        ]
+        if not self.input_fields:
+            self.input_fields = []
+            for i, (k, l, v) in enumerate(field_defs):
+                row, col = divmod(i, 2)
+                rect = pygame.Rect(modal.x + 24 + col * 400, modal.y + 70 + row * 48, 360, 32)
+                self.input_fields.append(InputField(k, l, v, rect))
+            self.active_input = self.input_fields[0].key
+        if not self.toggle_fields:
+            self.toggle_fields = []
+            for i, (k, l, v) in enumerate(toggle_defs):
+                rect = pygame.Rect(modal.x + 24 + i * 300, modal.y + 430, 360, 28)
+                self.toggle_fields.append(ToggleField(k, l, v, rect))
+
+        for field in self.input_fields:
+            self.screen.blit(self.small.render(field.label, True, MUTED), (field.rect.x, field.rect.y - 15))
+            active = field.key == self.active_input
+            pygame.draw.rect(self.screen, (27, 35, 48), field.rect, border_radius=6)
+            pygame.draw.rect(self.screen, ACCENT if active else (95, 108, 133), field.rect, 1, border_radius=6)
+            self.screen.blit(self.font.render(field.value, True, TEXT), (field.rect.x + 8, field.rect.y + 7))
+
+        for toggle in self.toggle_fields:
+            box = pygame.Rect(toggle.rect.x, toggle.rect.y + 4, 18, 18)
+            pygame.draw.rect(self.screen, (27, 35, 48), box, border_radius=4)
+            pygame.draw.rect(self.screen, ACCENT if toggle.value else (95, 108, 133), box, 1, border_radius=4)
+            if toggle.value:
+                pygame.draw.line(self.screen, ACCENT, (box.x + 4, box.y + 10), (box.x + 8, box.y + 14), 2)
+                pygame.draw.line(self.screen, ACCENT, (box.x + 8, box.y + 14), (box.x + 14, box.y + 5), 2)
+            self.screen.blit(self.small.render(toggle.label, True, TEXT), (toggle.rect.x + 26, toggle.rect.y + 5))
+
+        self.buttons.append(UIButton("Apply & Restart", "apply_options", pygame.Rect(modal.right - 270, modal.bottom - 52, 135, 34)))
+        self.buttons.append(UIButton("Close Menu", "close_options", pygame.Rect(modal.right - 122, modal.bottom - 52, 95, 34)))
+        for b in self.buttons[-2:]:
+            pygame.draw.rect(self.screen, (57, 70, 90), b.rect, border_radius=7)
+            self.screen.blit(self.small.render(b.label, True, TEXT), (b.rect.x + 8, b.rect.y + 9))
 
 
     def _draw_nn_detail_modal(self) -> None:
-        return
+        if self.nn_detail is None:
+            return
+        title, details = self.nn_detail
+        modal = pygame.Rect(320, 180, 640, 260)
+        pygame.draw.rect(self.screen, (10, 14, 20), modal, border_radius=12)
+        pygame.draw.rect(self.screen, ACCENT, modal, 2, border_radius=12)
+        self.screen.blit(self.big.render(title, True, TEXT), (modal.x + 20, modal.y + 20))
+        y = modal.y + 72
+        for key, value in details.items():
+            self.screen.blit(self.font.render(f"{key}: {value}", True, MUTED), (modal.x + 24, y))
+            y += 30
+        self.screen.blit(self.small.render("Click anywhere to close", True, ACCENT), (modal.x + 20, modal.bottom - 28))
 
 
     def _wrap_text(self, text: str, max_width: int) -> list[str]:
