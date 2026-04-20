@@ -1,18 +1,17 @@
 # NAIT Teaching AI Simulator
 
-A projector-friendly local teaching app for explaining how a **single-layer neural network policy** maps sensor readings to steering while students watch a live driving simulation.
+A classroom-focused local app for teaching how a **single-layer neural policy** drives using ray sensors.
 
-## What this version focuses on
+## Highlights
 
-- Real-time simulation loop in a classroom UI (track, vehicle, sensors, path trace).
-- Fast in-app training controls (quick/deep cycles with configurable evolution rules in code).
-- Neural-flow visualization showing sensor activation, weighted links, and steering output.
-- Multi-track testing so students can train on one track and immediately try others.
-- Architecture is already compatible with a future prefab-based track builder + save/load flow.
+- Cleaner simulation view with reduced visual clutter.
+- Attempt-history traces so students can watch training evolution over many failures.
+- Automatic restart after failure (default: 3 seconds, configurable).
+- Context menu + options modal (manual numeric entry for settings).
+- Updated figure-eight style track that avoids center-wall self-collision in 2D.
+- Start/finish lines span lane walls (track-width crossing).
 
 ## Core model
-
-The simulation remains powered by `simulator_core.py` with no hidden layers:
 
 ```text
 steering = tanh(bias + Σ(sensor[i] * weight[i]))
@@ -30,43 +29,17 @@ python -m pip install -r requirements.txt
 python app.py
 ```
 
-## Interactive controls
+## Controls
 
-- `Space` pause/resume
-- `R` reset current run
-- `N` single-step one frame
-- `T` / `Y` switch to next/previous built-in track
-- `1 / 2 / 3` load bad/decent/good policy presets
-- `G` quick training pass (`20` cycles)
-- `H` deeper training pass (`60` cycles)
-- `C` toggle continuous training (runs 1-cycle mini-rounds repeatedly)
-- `[` / `]` decrease/increase speed
-- `-` / `=` decrease/increase max turn rate
-- `<` / `>` decrease/increase sensor count
-- `;` / `'` decrease/increase sensor spread
-- `S` show/hide optional speed controls in UI
-- `A` show/hide acceleration model behavior
-- `M` simple mode toggle (hides neural math panel by default)
+- `Space`: pause/resume
+- `R`: reset current attempt
+- `N`: single-step one frame
+- `T` / `Y`: next / previous track
+- `G`: queue training batch
+- `C`: toggle continuous training
+- `O`: open/close options modal
+- Right-click: open context menu
 
-All key features also have clickable mouse buttons in the right-side control panel.
+## Attribution
 
-## Tracks
-
-Built-in demos include:
-- `oval_racetrack` (default)
-- `rectangle`
-- `chicane`
-- `slalom`
-- `pinch_turn`
-
-## Architecture notes
-
-- **Simulation engine (authoritative, UI-free):** `simulator_core.py`
-- **Track/demo content:** `tracks.py`
-- **Preset teaching content:** `policy_presets.py`
-- **Rendering + controls + training UI:** `app.py`
-
-## Planned later (not implemented yet)
-
-- Prefab track builder with snapping parts
-- Save/load custom track files from the builder workflow
+See `CREDITS.md` for asset and license notes.

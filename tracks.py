@@ -97,27 +97,30 @@ def _nascar_oval() -> Track:
 
 
 def _figure8() -> Track:
-    """Road-like looping figure-eight with explicit lane walls."""
-    points = 72
-    cx, cy = 9.0, 5.0
-    outer_points = []
-    inner_points = []
-    for idx in range(points):
-        t = (idx / points) * math.tau
-        x = cx + math.sin(t) * 6.2
-        y = cy + math.sin(t * 2.0) * 2.8
-        dx = 6.2 * math.cos(t)
-        dy = 5.6 * math.cos(t * 2.0)
-        length = math.hypot(dx, dy) or 1.0
-        nx, ny = -dy / length, dx / length
-        width = 1.15
-        outer_points.append((x + nx * width, y + ny * width))
-        inner_points.append((x - nx * width, y - ny * width))
-
-    segments: list[tuple[tuple[float, float], tuple[float, float]]] = []
-    for idx in range(points):
-        segments.append((outer_points[idx], outer_points[(idx + 1) % points]))
-        segments.append((inner_points[idx], inner_points[(idx + 1) % points]))
+    """Layer-friendly figure-eight variant with no colliding wall crossover."""
+    # This is a "stacked" figure-eight path: two loops connected by ramps,
+    # avoiding direct wall intersections at the center in a pure 2D collision model.
+    segments = [
+        # left loop outer
+        ((1.2, 5.0), (2.0, 2.9)), ((2.0, 2.9), (4.1, 1.7)), ((4.1, 1.7), (6.4, 2.2)),
+        ((6.4, 2.2), (7.3, 4.4)), ((7.3, 4.4), (6.2, 6.7)), ((6.2, 6.7), (3.9, 7.4)),
+        ((3.9, 7.4), (1.9, 6.4)), ((1.9, 6.4), (1.2, 5.0)),
+        # right loop outer
+        ((10.6, 5.6), (11.4, 3.4)), ((11.4, 3.4), (13.5, 2.5)), ((13.5, 2.5), (15.7, 3.1)),
+        ((15.7, 3.1), (16.5, 5.3)), ((16.5, 5.3), (15.4, 7.4)), ((15.4, 7.4), (13.2, 8.2)),
+        ((13.2, 8.2), (11.2, 7.4)), ((11.2, 7.4), (10.6, 5.6)),
+        # left loop inner
+        ((2.7, 5.0), (3.1, 4.0)), ((3.1, 4.0), (4.2, 3.4)), ((4.2, 3.4), (5.2, 3.6)),
+        ((5.2, 3.6), (5.7, 4.6)), ((5.7, 4.6), (5.2, 5.8)), ((5.2, 5.8), (4.1, 6.2)),
+        ((4.1, 6.2), (3.1, 5.7)), ((3.1, 5.7), (2.7, 5.0)),
+        # right loop inner
+        ((12.2, 5.6), (12.7, 4.5)), ((12.7, 4.5), (13.7, 4.1)), ((13.7, 4.1), (14.9, 4.4)),
+        ((14.9, 4.4), (15.2, 5.5)), ((15.2, 5.5), (14.7, 6.5)), ((14.7, 6.5), (13.6, 6.9)),
+        ((13.6, 6.9), (12.6, 6.5)), ((12.6, 6.5), (12.2, 5.6)),
+        # crossover ramps (top direction L->R, bottom direction R->L)
+        ((6.7, 5.4), (10.6, 5.6)), ((5.5, 4.6), (10.8, 3.4)),
+        ((6.2, 6.7), (11.2, 7.4)), ((5.2, 5.8), (12.2, 5.6)),
+    ]
     return Track.from_segments(segments)
 
 
@@ -159,10 +162,10 @@ TRACK_LIBRARY: dict[str, dict] = {
     },
     "figure8": {
         "description": "Looping figure-eight road for more advanced control demos.",
-        "spawn": (2.8, 5.0),
-        "heading": 15.0,
+        "spawn": (3.0, 5.0),
+        "heading": 10.0,
         "builder": _figure8,
-        "start_line": ((2.4, 4.2), (2.4, 5.8)),
+        "start_line": ((2.1, 4.2), (2.1, 5.9)),
     },
 }
 
