@@ -7,10 +7,7 @@ Usage:
 from __future__ import annotations
 
 import math
-import random
-import urllib.request
 from dataclasses import dataclass
-from pathlib import Path
 
 import pygame
 
@@ -45,29 +42,7 @@ class SimConfig:
     sensor_max_range: float = 3.8
     max_turn_rate_deg: float = 120.0
     dt: float = 0.05
-    auto_restart_delay: float = 3.0
-
-
-@dataclass
-class UIButton:
-    label: str
-    action: str
-    rect: pygame.Rect
-
-
-@dataclass
-class AttemptRecord:
-    path: list[tuple[float, float]]
-    cause: str
-    cycle: int
-
-
-@dataclass
-class InputField:
-    key: str
-    label: str
-    value: str
-    rect: pygame.Rect
+    auto_restart_delay: float = 2.5
 
 
 class TeachingApp:
@@ -81,10 +56,10 @@ class TeachingApp:
         self.small = pygame.font.SysFont("inter,arial", 15)
         self.big = pygame.font.SysFont("inter,arial", 24)
 
-        self.car_sprite = self._load_remote_asset("https://opengameart.org/sites/default/files/text3062.png", "car_sprite_cc0.png")
-        self.road_texture = self._load_remote_asset("https://opengameart.org/sites/default/files/asphalt.png", "asphalt_cc0.png")
-
+        self.config = SimConfig()
         self.track_names = track_names()
+        self.scenario_keys = scenario_names()
+        self.scenario_idx = 0
         self.track_idx = 0
         self.track_def = build_track_definition(self.track_names[self.track_idx])
 
@@ -313,13 +288,8 @@ class TeachingApp:
     def run(self) -> None:
         while self.running:
             self._handle_events()
-            if self.continuous_training:
-                self.training_requested_cycles += 1
-            if self.training_requested_cycles > 0:
-                self._train_one_cycle()
-            if not self.paused or self.step_once:
+            if not self.paused:
                 self._tick_simulation(self.config.dt)
-                self.step_once = False
             self._render()
             self.clock.tick(60)
         pygame.quit()
@@ -329,19 +299,18 @@ class TeachingApp:
             if event.type == pygame.QUIT:
                 self.running = False
             elif event.type == pygame.KEYDOWN:
-                if self.options_open:
-                    self._handle_text_input(event)
-                    continue
                 if event.key == pygame.K_ESCAPE:
                     self.running = False
                 elif event.key == pygame.K_SPACE:
                     self.paused = not self.paused
                 elif event.key == pygame.K_r:
-                    self._reset_episode("manual")
+                    self._reset_episode()
+                    self.status = "Episode reset"
                 elif event.key == pygame.K_t:
                     self.track_idx = (self.track_idx + 1) % len(self.track_names)
                     self.track_def = build_track_definition(self.track_names[self.track_idx])
-                    self._reset_episode("track")
+                    self._reset_episode()
+                    self.status = f"Track changed: {self.track_def.name}"
                 elif event.key == pygame.K_y:
                     self.track_idx = (self.track_idx - 1) % len(self.track_names)
                     self.track_def = build_track_definition(self.track_names[self.track_idx])
@@ -452,7 +421,7 @@ class TeachingApp:
         if not self.agent.alive:
             self.restart_countdown -= dt
             if self.restart_countdown <= 0:
-                self._reset_episode("collision")
+                self._reset_episode()
             return
 
         prev_position = self.agent.position
@@ -473,18 +442,6 @@ class TeachingApp:
             self.agent.alive = False
             self.restart_countdown = self.config.auto_restart_delay
             self.status = f"Collision. Restart in {self.config.auto_restart_delay:.1f}s"
-
-    def _segments_intersect(
-        self,
-        a1: tuple[float, float],
-        a2: tuple[float, float],
-        b1: tuple[float, float],
-        b2: tuple[float, float],
-    ) -> bool:
-        def ccw(p1: tuple[float, float], p2: tuple[float, float], p3: tuple[float, float]) -> bool:
-            return (p3[1] - p1[1]) * (p2[0] - p1[0]) > (p2[1] - p1[1]) * (p3[0] - p1[0])
-
-        return ccw(a1, b1, b2) != ccw(a2, b1, b2) and ccw(a1, a2, b1) != ccw(a1, a2, b2)
 
     def _world_bounds(self) -> tuple[float, float, float, float]:
         xs = [pt[0] for seg in self.track_def.track.wall_segments for pt in seg]
@@ -512,10 +469,6 @@ class TeachingApp:
         self._draw_track(track_rect)
         self._draw_hud(hud_rect)
         self._draw_side(side_rect)
-        if self.context_menu_open:
-            self._draw_context_menu()
-        if self.options_open:
-            self._draw_options_modal()
         pygame.display.flip()
 
     def _draw_hud(self, rect: pygame.Rect) -> None:
@@ -526,39 +479,15 @@ class TeachingApp:
         self.screen.blit(self.big.render(text, True, TEXT), (rect.x + 14, rect.y + 12))
 
     def _draw_track(self, rect: pygame.Rect) -> None:
-        for idx, attempt in enumerate(self.attempt_history[-70:]):
-            if len(attempt.path) < 2:
-                continue
-            alpha_ratio = (idx + 1) / 70.0
-            color = (60, int(80 + 90 * alpha_ratio), int(110 + 120 * alpha_ratio))
-            pts = [self._to_screen(p, rect) for p in attempt.path]
-            pygame.draw.lines(self.screen, color, False, pts, 1)
-
-        if self.road_texture:
-            tile = pygame.transform.smoothscale(self.road_texture, (220, 220))
-            for tx in range(rect.x + 8, rect.right - 8, 220):
-                for ty in range(rect.y + 8, rect.bottom - 8, 220):
-                    self.screen.blit(tile, (tx, ty))
-
         for seg in self.track_def.track.wall_segments:
             pygame.draw.line(self.screen, (220, 231, 248), self._to_screen(seg[0], rect), self._to_screen(seg[1], rect), 3)
-
-        start_a = self._to_screen(self.track_def.start_line[0], rect)
-        start_b = self._to_screen(self.track_def.start_line[1], rect)
-        pygame.draw.line(self.screen, (255, 255, 255), start_a, start_b, 5)
 
         if len(self.agent.path_trace) > 2:
             pts = [self._to_screen(p, rect) for p in self.agent.path_trace[-350:]]
             pygame.draw.lines(self.screen, ACCENT, False, pts, 2)
 
         car = self._to_screen(self.agent.position, rect)
-        if self.car_sprite:
-            sprite = pygame.transform.rotozoom(self.car_sprite, self.agent.heading_deg - 90.0, 0.42)
-            if not self.agent.alive:
-                sprite.fill((180, 80, 80, 190), special_flags=pygame.BLEND_RGBA_MULT)
-            self.screen.blit(sprite, sprite.get_rect(center=car))
-        else:
-            pygame.draw.circle(self.screen, GREEN if self.agent.alive else RED, car, 9)
+        pygame.draw.circle(self.screen, GREEN if self.agent.alive else RED, car, 9)
         angle = math.radians(self.agent.heading_deg)
         nose = (int(car[0] + math.cos(angle) * 17), int(car[1] - math.sin(angle) * 17))
         pygame.draw.line(self.screen, (255, 217, 107), car, nose, 3)
