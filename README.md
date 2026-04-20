@@ -1,15 +1,16 @@
 # NAIT Teaching AI Simulator
 
-A projector-friendly local teaching app for explaining how a **single-layer neural network policy** maps sensor readings to steering.
+A projector-friendly local teaching app for explaining how a **single-layer neural network policy** maps sensor readings to steering while students watch a live driving simulation.
 
 ## What this version focuses on
 
-- Classroom polish and legibility (large visual stage + clearer hierarchy).
-- Explicit teaching overlays that show how `sensor * weight + bias` creates steering.
-- Guided demo flow with built-in policy presets (`bad`, `decent`, `good`).
-- Manual tuning controls suitable for live demos (no training algorithm yet).
+- Real-time simulation loop in a classroom UI (track, vehicle, sensors, path trace).
+- Fast in-app training controls (quick/deep cycles with configurable evolution rules in code).
+- Neural-flow visualization showing sensor activation, weighted links, and steering output.
+- Multi-track testing so students can train on one track and immediately try others.
+- Architecture is already compatible with a future prefab-based track builder + save/load flow.
 
-## Core model (unchanged)
+## Core model
 
 The simulation remains powered by `simulator_core.py` with no hidden layers:
 
@@ -29,66 +30,34 @@ python -m pip install -r requirements.txt
 python app.py
 ```
 
-`app.py` is the runnable entrypoint. It constructs a default rectangular track, configures sensors and a linear policy, runs the simulator, and prints distance, survival time, and crash reason to the console.
+## Interactive controls
 
-## Teacher controls (right panel)
-
-### Runtime
-- **Run / Pause / Reset**
-- **Slow-Mo** (20% speed)
-- **Step** (single simulation step)
-- **Track** (cycles through demonstration tracks)
-- **Demo UI** (larger text, less clutter)
-
-### Policy/demo
-- **Bad / Decent / Good** preset buttons with on-screen explanation.
-- **Load / Save** policy JSON with `LinearPolicy` format compatibility.
-
-### Numeric controls (exact editing still available)
-- Sensor angles CSV
-- Weights CSV
-- Bias
-- Sensor max range
-- Speed
-- Max turn rate
-
-Use **Apply** after editing numeric fields.
+- `Space` pause/resume
+- `R` reset current run
+- `N` single-step one frame
+- `T` switch to next built-in track
+- `1 / 2 / 3` load bad/decent/good policy presets
+- `G` quick training pass (`20` cycles)
+- `H` deeper training pass (`60` cycles)
+- `[` / `]` decrease/increase speed
+- `-` / `=` decrease/increase max turn rate
 
 ## Tracks
 
-At least 4 built-in tracks are included, each with a tuned spawn point and heading:
+Built-in demos include:
 - `rectangle`
 - `chicane`
 - `slalom`
 - `pinch_turn`
 
-## Teaching overlays included
-
-- Vehicle shape + heading arrow (instead of plain point marker).
-- Strongly visible sensor rays.
-- Neural-network mini diagram:
-  - sensor input nodes
-  - weighted connection lines
-  - single output node (steering)
-  - explicit bias term and `tanh` output mapping
-- Gauges/bars for steering and speed.
-- Left/front/right danger interpretation from sensor groupings.
-
 ## Architecture notes
 
 - **Simulation engine (authoritative, UI-free):** `simulator_core.py`
-  - Physics, sensing, policy math, collision, metrics.
 - **Track/demo content:** `tracks.py`
-  - Track library, builders, spawn points, headings.
 - **Preset teaching content:** `policy_presets.py`
-  - Built-in policies + classroom explanation notes.
-- **Rendering + controls + teaching overlays:** `app.py`
-  - Pygame stage, control panel, NN diagram, gauges, demo/presentation behavior.
+- **Rendering + controls + training UI:** `app.py`
 
-## Intentionally out of scope (for now)
+## Planned later (not implemented yet)
 
-- Hidden layers
-- Automated training algorithms
-- REST/QR/web/multiplayer
-
-This keeps the app focused on manual tuning and explainability for short classroom sessions.
+- Prefab track builder with snapping parts
+- Save/load custom track files from the builder workflow
