@@ -27,14 +27,6 @@ ACCENT = (102, 186, 255)
 GREEN = (82, 212, 153)
 RED = (255, 115, 115)
 
-
-ASSET_DIR = Path(__file__).parent / "assets"
-ASSET_SOURCES = {
-    "car.png": "https://opengameart.org/sites/default/files/text3062.png",
-    "road.png": "https://opengameart.org/sites/default/files/asphalt.png",
-}
-
-
 @dataclass
 class TrainRules:
     cycles: int = 20
@@ -108,8 +100,7 @@ class TeachingApp:
         self.car_sprite: pygame.Surface | None = None
         self.road_texture: pygame.Surface | None = None
         self.wall_texture: pygame.Surface | None = None
-        self.panel_texture: pygame.Surface | None = None
-        self._load_art_assets()
+        self._build_embedded_assets()
 
         self.track_names = track_names()
         self.track_idx = 0
@@ -165,6 +156,70 @@ class TeachingApp:
         self.section_help_key: str | None = None
         self.nn_hitboxes: list[tuple[pygame.Rect, str, dict[str, str]]] = []
         self.nn_detail: tuple[str, dict[str, str]] | None = None
+
+    def _build_embedded_assets(self) -> None:
+        road = pygame.Surface((192, 192), pygame.SRCALPHA)
+        for y in range(192):
+            for x in range(192):
+                noise = ((x * 17 + y * 29) % 23) - 11
+                c = max(35, min(70, 52 + noise))
+                road.set_at((x, y), (c, c, c, 255))
+        for y in range(0, 192, 24):
+            for x in range(0, 192, 24):
+                for dy in range(4):
+                    for dx in range(4):
+                        road.set_at((x + dx, y + dy), (72, 72, 72, 255))
+
+        wall = pygame.Surface((192, 192), pygame.SRCALPHA)
+        for y in range(192):
+            for x in range(192):
+                mortar = (x % 32 in (0, 1, 2)) or (y % 16 in (0, 1))
+                base = 130 if mortar else 110 + ((x // 7 + y // 5) % 2) * 12
+                wall.set_at((x, y), (base, base, base + 6, 255))
+
+        car = pygame.Surface((96, 160), pygame.SRCALPHA)
+        cx, cy = 48, 80
+        for y in range(160):
+            for x in range(96):
+                nx = (x - cx) / 32
+                ny = (y - cy) / 66
+                if nx * nx + ny * ny <= 1.0:
+                    car.set_at((x, y), (42, 181, 125, 255))
+        for y in range(48, 76):
+            for x in range(30, 66):
+                if ((x - 48) / 20) ** 2 + ((y - 62) / 14) ** 2 <= 1.0:
+                    car.set_at((x, y), (145, 195, 235, 235))
+        for y in range(90, 114):
+            for x in range(32, 64):
+                if ((x - 48) / 18) ** 2 + ((y - 102) / 12) ** 2 <= 1.0:
+                    car.set_at((x, y), (125, 175, 215, 235))
+        for y0 in (44, 116):
+            for x0 in (18, 70):
+                for y in range(y0, y0 + 22):
+                    for x in range(x0, x0 + 10):
+                        car.set_at((x, y), (25, 25, 25, 255))
+
+        self.road_texture = road
+        self.wall_texture = wall
+        self.car_sprite = car
+
+    def _blit_segment_texture(
+        self,
+        texture: pygame.Surface | None,
+        start: tuple[int, int],
+        end: tuple[int, int],
+        width: int,
+    ) -> None:
+        if texture is None:
+            return
+        dx = end[0] - start[0]
+        dy = end[1] - start[1]
+        length = max(1, int(math.hypot(dx, dy)))
+        angle = -math.degrees(math.atan2(dy, dx))
+        strip = pygame.transform.smoothscale(texture, (length, width))
+        strip = pygame.transform.rotate(strip, angle)
+        mid = ((start[0] + end[0]) // 2, (start[1] + end[1]) // 2)
+        self.screen.blit(strip, strip.get_rect(center=mid))
 
 
     def _download_asset(self, filename: str, url: str) -> Path | None:
@@ -691,21 +746,48 @@ class TeachingApp:
         return
 
     def _draw_track(self, rect: pygame.Rect) -> None:
-        if self.road_texture is not None:
-            tile = pygame.transform.smoothscale(self.road_texture, (160, 160))
-            for tx in range(rect.x, rect.right, 160):
-                for ty in range(rect.y, rect.bottom, 160):
+        if self.road_texture:
+            tile = pygame.transform.smoothscale(self.road_texture, (180, 180))
+            for tx in range(rect.x, rect.right, 180):
+                for ty in range(rect.y, rect.bottom, 180):
                     self.screen.blit(tile, (tx, ty))
+        else:
+            pygame.draw.rect(self.screen, (20, 24, 32), rect, border_radius=12)
 
         for seg in self.track_def.track.wall_segments:
             p1 = self._to_screen(seg[0], rect)
             p2 = self._to_screen(seg[1], rect)
-            self._blit_segment_texture(self.wall_texture, p1, p2, 16)
+            self._blit_segment_texture(self.wall_texture, p1, p2, 18)
+            if self.wall_texture is None:
+                pygame.draw.line(self.screen, (220, 231, 248), p1, p2, 3)
+
+        start_a = self._to_screen(self.track_def.start_line[0], rect)
+        start_b = self._to_screen(self.track_def.start_line[1], rect)
+        pygame.draw.line(self.screen, (255, 255, 255), start_a, start_b, 5)
+
+        if len(self.agent.path_trace) > 2:
+            pts = [self._to_screen(p, rect) for p in self.agent.path_trace[-350:]]
+            pygame.draw.lines(self.screen, ACCENT, False, pts, 2)
 
         car = self._to_screen(self.agent.position, rect)
-        if self.car_sprite is not None:
-            sprite = pygame.transform.rotozoom(self.car_sprite, self.agent.heading_deg - 90.0, 0.30)
+        if self.car_sprite:
+            sprite = pygame.transform.rotozoom(self.car_sprite, self.agent.heading_deg - 90.0, 0.34)
             self.screen.blit(sprite, sprite.get_rect(center=car))
+        else:
+            self._draw_car_vector(car)
+        if not self.agent.alive:
+            x_size = 16
+            pygame.draw.line(self.screen, RED, (car[0] - x_size, car[1] - x_size), (car[0] + x_size, car[1] + x_size), 5)
+            pygame.draw.line(self.screen, RED, (car[0] - x_size, car[1] + x_size), (car[0] + x_size, car[1] - x_size), 5)
+        angle = math.radians(self.agent.heading_deg)
+        nose = (int(car[0] + math.cos(angle) * 17), int(car[1] - math.sin(angle) * 17))
+        pygame.draw.line(self.screen, (255, 217, 107), car, nose, 3)
+
+        for rel_angle, _, hit in zip(self.policy.sensor_angles_deg, self.last_sensor_values, self.last_sensor_hits, strict=True):
+            a = math.radians(self.agent.heading_deg + rel_angle)
+            length = self.config.sensor_max_range if hit is None else min(hit, self.config.sensor_max_range)
+            end_w = (self.agent.position[0] + math.cos(a) * length, self.agent.position[1] + math.sin(a) * length)
+            pygame.draw.line(self.screen, (94, 155, 235), car, self._to_screen(end_w, rect), 1)
 
     def _draw_side(self, rect: pygame.Rect) -> None:
         if self.panel_texture is not None:

@@ -42,4 +42,4 @@ python app.py
 
 ## Attribution
 
-See `CREDITS.md` for asset and license notes.
+See `CREDITS.md` for generated-asset and license notes.
