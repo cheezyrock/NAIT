@@ -9,7 +9,6 @@ from __future__ import annotations
 import math
 import random
 from dataclasses import dataclass
-from pathlib import Path
 
 import pygame
 
@@ -45,7 +44,7 @@ class SimConfig:
     max_turn_rate_deg: float = 120.0
     dt: float = 0.05
     auto_restart_delay: float = 3.0
-    step_multiplier: float = 1.0
+    step_multiplier: float = 0.25
 
 
 @dataclass
@@ -97,15 +96,16 @@ class TeachingApp:
         self.small = pygame.font.SysFont("inter,arial", 15)
         self.big = pygame.font.SysFont("inter,arial", 24)
 
-        self._ensure_local_assets()
-        self.car_sprite = self._load_local_asset("car_topdown.png")
-        self.road_texture = self._load_local_asset("road_tile_topdown.png")
+        self.car_sprite = None
+        self.road_texture = None
 
         self.track_names = track_names()
         self.track_idx = 0
         self.track_def = build_track_definition(self.track_names[self.track_idx])
 
         self.policy = self._policy_from_preset("decent")
+        self.policy.accel_weights = None
+        self.policy.brake_weights = None
         self.training_rules = TrainRules()
         self.config = SimConfig()
         self.sensor_spread_deg = 120.0
@@ -151,40 +151,9 @@ class TeachingApp:
         self.nn_outputs: dict[str, float] = {"steering": 0.0, "accel": 0.0, "brake": 0.0}
         self.phase = "sense"
         self.section_help_key: str | None = None
+        self.nn_hitboxes: list[tuple[pygame.Rect, str, dict[str, str]]] = []
+        self.nn_detail: tuple[str, dict[str, str]] | None = None
 
-
-    def _ensure_local_assets(self) -> None:
-        assets_dir = Path("assets")
-        assets_dir.mkdir(exist_ok=True)
-        car_path = assets_dir / "car_topdown.png"
-        road_path = assets_dir / "road_tile_topdown.png"
-        if not car_path.exists():
-            car_surface = pygame.Surface((64, 128), pygame.SRCALPHA)
-            pygame.draw.rect(car_surface, (35, 140, 206), pygame.Rect(12, 10, 40, 108), border_radius=14)
-            pygame.draw.rect(car_surface, (16, 58, 87), pygame.Rect(18, 24, 28, 46), border_radius=8)
-            pygame.draw.rect(car_surface, (16, 58, 87), pygame.Rect(18, 76, 28, 26), border_radius=8)
-            for x in (10, 50):
-                pygame.draw.rect(car_surface, (30, 33, 42), pygame.Rect(x, 24, 6, 18), border_radius=3)
-                pygame.draw.rect(car_surface, (30, 33, 42), pygame.Rect(x, 84, 6, 18), border_radius=3)
-            pygame.draw.polygon(car_surface, (244, 191, 117), [(32, 4), (26, 16), (38, 16)])
-            pygame.image.save(car_surface, car_path.as_posix())
-        if not road_path.exists():
-            road_surface = pygame.Surface((256, 256), pygame.SRCALPHA)
-            road_surface.fill((44, 49, 59))
-            for i in range(0, 256, 16):
-                pygame.draw.line(road_surface, (48, 55, 66), (i, 0), (i, 256), 1)
-                pygame.draw.line(road_surface, (48, 55, 66), (0, i), (256, i), 1)
-            pygame.draw.circle(road_surface, (54, 61, 73), (40, 40), 6)
-            pygame.draw.circle(road_surface, (54, 61, 73), (180, 140), 5)
-            pygame.draw.circle(road_surface, (54, 61, 73), (90, 220), 4)
-            pygame.image.save(road_surface, road_path.as_posix())
-
-    def _load_local_asset(self, local_name: str) -> pygame.Surface | None:
-        path = Path("assets") / local_name
-        try:
-            return pygame.image.load(str(path)).convert_alpha()
-        except Exception:
-            return None
 
     def _policy_from_preset(self, preset_name: str) -> NeuralPolicy:
         preset = PRESETS[preset_name]
@@ -352,15 +321,15 @@ class TeachingApp:
             sensors = self._safe_set_int(values["sensor_count"], 3, 12)
             spread = self._safe_set_float(values["sensor_spread"], 30.0, 175.0)
             self._set_sensor_layout(sensors, spread)
-            if toggles.get("accel_head", True) and self.policy.accel_weights is None:
+            use_speed_heads = toggles.get("speed_control_heads", False)
+            if use_speed_heads and self.policy.accel_weights is None:
                 self.policy.accel_weights = [random.uniform(-0.3, 0.3) for _ in range(self.policy.hidden_count)]
                 self.policy.accel_bias = 0.0
-            if not toggles.get("accel_head", True):
-                self.policy.accel_weights = None
-            if toggles.get("brake_head", True) and self.policy.brake_weights is None:
+            if use_speed_heads and self.policy.brake_weights is None:
                 self.policy.brake_weights = [random.uniform(-0.3, 0.3) for _ in range(self.policy.hidden_count)]
                 self.policy.brake_bias = 0.0
-            if not toggles.get("brake_head", True):
+            if not use_speed_heads:
+                self.policy.accel_weights = None
                 self.policy.brake_weights = None
             self.sensor_array = SensorArray(list(self.policy.sensor_angles_deg), self.config.sensor_max_range)
             self._reseed_training_population()
@@ -429,11 +398,16 @@ class TeachingApp:
                     if self.section_help_key is not None:
                         self.section_help_key = None
                         continue
+                    if self.nn_detail is not None:
+                        self.nn_detail = None
+                        continue
                     if self.options_open and self._handle_options_click(event.pos):
                         continue
                     if self._handle_stat_click(event.pos):
                         continue
                     if self._handle_section_help_click(event.pos):
+                        continue
+                    if self._handle_nn_click(event.pos):
                         continue
                     if self.context_menu_open and self._handle_context_click(event.pos):
                         continue
@@ -462,7 +436,7 @@ class TeachingApp:
         self.context_buttons = [
             UIButton("Open Options", "options", pygame.Rect(menu.x + 8, menu.y + 8, menu.w - 16, 24)),
             UIButton("Reset Attempt", "reset", pygame.Rect(menu.x + 8, menu.y + 36, menu.w - 16, 24)),
-            UIButton("Queue Train", "train", pygame.Rect(menu.x + 8, menu.y + 64, menu.w - 16, 24)),
+            UIButton("Train Batch", "train", pygame.Rect(menu.x + 8, menu.y + 64, menu.w - 16, 24)),
         ]
 
     def _handle_context_click(self, pos: tuple[int, int]) -> bool:
@@ -502,14 +476,47 @@ class TeachingApp:
                     self.track_idx = (self.track_idx - 1) % len(self.track_names)
                     self.track_def = build_track_definition(self.track_names[self.track_idx])
                     self._reset_episode("track")
+                elif btn.action == "reset_all":
+                    self._reset_all_state()
                 elif btn.action == "step_once":
                     self.step_once = True
                     self.paused = True
-                elif btn.action == "step_speed":
-                    rates = [0.25, 0.5, 1.0, 2.0, 4.0]
-                    current_idx = rates.index(self.config.step_multiplier) if self.config.step_multiplier in rates else 2
-                    self.config.step_multiplier = rates[(current_idx + 1) % len(rates)]
+                elif btn.action == "step_speed_up":
+                    rates = [0.25 * (2 ** i) for i in range(8)]
+                    current_idx = rates.index(self.config.step_multiplier) if self.config.step_multiplier in rates else 0
+                    self.config.step_multiplier = rates[min(len(rates) - 1, current_idx + 1)]
+                elif btn.action == "step_speed_down":
+                    rates = [0.25 * (2 ** i) for i in range(8)]
+                    current_idx = rates.index(self.config.step_multiplier) if self.config.step_multiplier in rates else 0
+                    self.config.step_multiplier = rates[max(0, current_idx - 1)]
                 break
+
+    def _handle_nn_click(self, pos: tuple[int, int]) -> bool:
+        for rect, title, details in self.nn_hitboxes:
+            if rect.collidepoint(pos):
+                self.nn_detail = (title, details)
+                return True
+        return False
+
+    def _reset_all_state(self) -> None:
+        self.track_idx = 0
+        self.track_def = build_track_definition(self.track_names[self.track_idx])
+        self.training_population = None
+        self.training_requested_cycles = 0
+        self.total_training_cycles = 0
+        self.attempts_total = 0
+        self.attempt_history = []
+        self.best_fitness_seen = float("-inf")
+        self.lap_count = 0
+        self.paused = False
+        self.continuous_training = False
+        self.policy = self._policy_from_preset("decent")
+        self.policy.accel_weights = None
+        self.policy.brake_weights = None
+        self.sensor_spread_deg = 120.0
+        self.sensor_array = SensorArray(list(self.policy.sensor_angles_deg), self.config.sensor_max_range)
+        self.status = "Application reset to defaults"
+        self._reset_episode("fresh-start")
 
     def _handle_stat_click(self, pos: tuple[int, int]) -> bool:
         for chip in self.stat_chips:
@@ -614,6 +621,8 @@ class TeachingApp:
         track_rect = pygame.Rect(14, 70, 900, 676)
         hud_rect = pygame.Rect(14, 12, 1252, 50)
         side_rect = pygame.Rect(926, 70, 340, 676)
+        self.buttons = []
+        self.nn_hitboxes = []
 
         pygame.draw.rect(self.screen, PANEL, hud_rect, border_radius=12)
         pygame.draw.rect(self.screen, (12, 16, 22), track_rect, border_radius=12)
@@ -630,6 +639,8 @@ class TeachingApp:
             self._draw_stat_help_modal()
         if self.section_help_key is not None:
             self._draw_section_help_modal()
+        if self.nn_detail is not None:
+            self._draw_nn_detail_modal()
         pygame.display.flip()
 
     def _draw_hud(self, rect: pygame.Rect) -> None:
@@ -651,6 +662,12 @@ class TeachingApp:
             self.screen.blit(self.font.render(chip_text, True, TEXT), (chip.x + 10, chip.y + 7))
             self.stat_chips.append(StatChip(key, label, value, chip))
             x += w + 10
+
+        button_y = rect.y + 10
+        right = rect.right - 12
+        self._draw_button("Reset All", "reset_all", right - 120, button_y, 108)
+        self._draw_button("Track ▶", "track_next", right - 232, button_y, 100)
+        self._draw_button("Track ◀", "track_prev", right - 344, button_y, 100)
 
     def _draw_track(self, rect: pygame.Rect) -> None:
         road = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
@@ -703,7 +720,10 @@ class TeachingApp:
 
     def _draw_side(self, rect: pygame.Rect) -> None:
         x, y = rect.x + 14, rect.y + 14
-        for line in self._wrap_text(f"Status: {self.status}", rect.width - 28):
+        status_lines = self._wrap_text(f"Status: {self.status}", rect.width - 28)[:4]
+        while len(status_lines) < 4:
+            status_lines.append("")
+        for line in status_lines:
             self.screen.blit(self.font.render(line, True, MUTED), (x, y))
             y += 20
         y += 8
@@ -712,31 +732,30 @@ class TeachingApp:
             f"Alive: {self.agent.alive}",
             f"Speed: {self.agent.speed:.2f}",
             f"Steer: {self.last_steering:+.3f}",
-            f"Accel head: {'on' if self.policy.accel_weights is not None else 'off'}",
-            f"Brake head: {'on' if self.policy.brake_weights is not None else 'off'}",
-            f"Queued training: {self.training_requested_cycles}",
+            f"Accel/Brake heads: {'on' if self.policy.accel_weights is not None else 'off'}",
             f"Auto-restart delay: {self.config.auto_restart_delay:.1f}s",
         ]
         for t in lines:
             self.screen.blit(self.font.render(t, True, TEXT), (x, y))
             y += 24
         y += 8
-        self.buttons = []
         self._draw_button("Pause/Run", "pause", x, y, 150)
         self._draw_button("Restart", "reset", x + 160, y, 150)
         y += 36
         self._draw_button("Train Batch", "train", x, y, 150)
         self._draw_button("Continuous", "continuous", x + 160, y, 150)
         y += 36
-        self._draw_button("Track ◀", "track_prev", x, y, 100)
-        self._draw_button("Track ▶", "track_next", x + 108, y, 100)
-        self._draw_button("Options", "options", x + 216, y, 96)
+        self._draw_button("Options", "options", x, y, 150)
+        self._draw_button("Step Once", "step_once", x + 160, y, 150)
         y += 36
-        self._draw_button("Step Once", "step_once", x, y, 150)
-        self._draw_button(f"Step Speed x{self.config.step_multiplier:g}", "step_speed", x + 160, y, 150)
+        self._draw_button("Speed -", "step_speed_down", x, y, 94)
+        self._draw_button(f"x{self.config.step_multiplier:g}", "noop", x + 102, y, 104)
+        self._draw_button("Speed +", "step_speed_up", x + 214, y, 96)
         y += 42
-        self._draw_help_button("help_controls", "?", rect.right - 30, rect.y + 138)
+        self._draw_help_button("help_controls", "?", rect.right - 30, rect.y + 86)
+        self._draw_help_button("help_train", "?", rect.right - 30, rect.y + 122)
         self._draw_help_button("help_phase", "?", rect.right - 30, rect.y + 46)
+        self._draw_help_button("help_speed", "?", rect.right - 30, rect.y + 158)
         self._draw_help_button("help_nn", "?", rect.right - 30, y + 8)
         self._draw_nn_graph(pygame.Rect(x, y, rect.width - 28, rect.bottom - y - 10))
         self.screen.blit(self.small.render("Tip: every ⓘ stat and ? button is clickable help", True, MUTED), (x, rect.bottom - 24))
@@ -752,7 +771,10 @@ class TeachingApp:
         rect = pygame.Rect(x, y, w, 30)
         self.buttons.append(UIButton(label, action, rect))
         active = action == "continuous" and self.continuous_training
-        color = (48, 115, 84) if active else (60, 74, 95)
+        if action == "noop":
+            color = (38, 48, 63)
+        else:
+            color = (48, 115, 84) if active else (60, 74, 95)
         pygame.draw.rect(self.screen, color, rect, border_radius=7)
         pygame.draw.rect(self.screen, (115, 131, 159), rect, 1, border_radius=7)
         self.screen.blit(self.small.render(label, True, TEXT), (x + 10, y + 8))
@@ -791,8 +813,11 @@ class TeachingApp:
         ox = rect.right - 34
         sensors = self.nn_activations.get("sensor", [])
         hidden = self.nn_activations.get("hidden", [])
-        outputs = [self.nn_outputs.get("steering", 0.0), self.nn_outputs.get("accel", 0.0), self.nn_outputs.get("brake", 0.0)]
-        names = ["Steer", "Accel", "Brake"]
+        outputs: list[tuple[str, float, list[float] | None]] = [("Steer", self.nn_outputs.get("steering", 0.0), self.policy.steering_weights)]
+        if self.policy.accel_weights is not None:
+            outputs.append(("Accel", self.nn_outputs.get("accel", 0.0), self.policy.accel_weights))
+        if self.policy.brake_weights is not None:
+            outputs.append(("Brake", self.nn_outputs.get("brake", 0.0), self.policy.brake_weights))
 
         def y_positions(count: int) -> list[int]:
             if count <= 1:
@@ -800,25 +825,70 @@ class TeachingApp:
             gap = (rect.height - 48) / (count - 1)
             return [int(rect.y + 28 + idx * gap) for idx in range(count)]
 
-        sy, hy, oy = y_positions(len(sensors)), y_positions(len(hidden)), y_positions(3)
-        for y1 in sy:
-            for y2 in hy:
-                pygame.draw.line(self.screen, (55, 66, 86), (sx, y1), (hx, y2), 1)
-        for y1 in hy:
-            for y2 in oy:
-                pygame.draw.line(self.screen, (55, 66, 86), (hx, y1), (ox, y2), 1)
+        sy, hy, oy = y_positions(len(sensors)), y_positions(len(hidden)), y_positions(len(outputs))
+        for s_idx, y1 in enumerate(sy):
+            for h_idx, y2 in enumerate(hy):
+                weight = self.policy.hidden_weights[h_idx][s_idx]
+                contribution = sensors[s_idx] * weight
+                intensity = min(1.0, abs(contribution))
+                color = (int(80 + intensity * 160), int(70 + intensity * 130), int(90 + (1 if contribution >= 0 else 0) * 110))
+                pygame.draw.line(self.screen, color, (sx, y1), (hx, y2), 2 if intensity > 0.2 else 1)
+                mid = pygame.Rect((sx + hx) // 2 - 5, (y1 + y2) // 2 - 5, 10, 10)
+                self.nn_hitboxes.append(
+                    (
+                        mid,
+                        f"Edge Sensor {s_idx + 1} → Hidden {h_idx + 1}",
+                        {
+                            "Weight": f"{weight:+.4f}",
+                            "Sensor value": f"{sensors[s_idx]:.4f}",
+                            "Contribution": f"{contribution:+.4f}",
+                        },
+                    )
+                )
+        for h_idx, y1 in enumerate(hy):
+            for o_idx, (name, _, out_weights) in enumerate(outputs):
+                if out_weights is None:
+                    continue
+                y2 = oy[o_idx]
+                weight = out_weights[h_idx]
+                contribution = hidden[h_idx] * weight
+                intensity = min(1.0, abs(contribution))
+                color = (int(80 + intensity * 160), int(70 + intensity * 130), int(90 + (1 if contribution >= 0 else 0) * 110))
+                pygame.draw.line(self.screen, color, (hx, y1), (ox, y2), 2 if intensity > 0.2 else 1)
+                mid = pygame.Rect((hx + ox) // 2 - 5, (y1 + y2) // 2 - 5, 10, 10)
+                self.nn_hitboxes.append(
+                    (
+                        mid,
+                        f"Edge Hidden {h_idx + 1} → {name}",
+                        {
+                            "Weight": f"{weight:+.4f}",
+                            "Hidden value": f"{hidden[h_idx]:+.4f}",
+                            "Contribution": f"{contribution:+.4f}",
+                        },
+                    )
+                )
 
         for idx, value in enumerate(sensors):
-            color = (80, int(120 + value * 120), 220)
-            pygame.draw.circle(self.screen, color, (sx, sy[idx]), 7)
+            intensity = min(1.0, abs(value))
+            color = (int(90 + intensity * 140), int(110 + intensity * 130), 230)
+            center = (sx, sy[idx])
+            pygame.draw.circle(self.screen, color, center, 7)
+            node_rect = pygame.Rect(center[0] - 10, center[1] - 10, 20, 20)
+            self.nn_hitboxes.append((node_rect, f"Sensor {idx + 1}", {"Activation": f"{value:.4f}", "Angle": f"{self.policy.sensor_angles_deg[idx]:+.1f}°"}))
         for idx, value in enumerate(hidden):
             magnitude = abs(value)
             color = (int(120 + 120 * magnitude), 90, int(100 + (1 if value > 0 else 0) * 120))
-            pygame.draw.circle(self.screen, color, (hx, hy[idx]), 8)
-        for idx, value in enumerate(outputs):
+            center = (hx, hy[idx])
+            pygame.draw.circle(self.screen, color, center, 8)
+            node_rect = pygame.Rect(center[0] - 10, center[1] - 10, 20, 20)
+            self.nn_hitboxes.append((node_rect, f"Hidden {idx + 1}", {"Activation": f"{value:+.4f}", "Bias": f"{self.policy.hidden_biases[idx]:+.4f}"}))
+        for idx, (name, value, _) in enumerate(outputs):
             color = (60, int(110 + min(1.0, abs(value)) * 130), 130)
-            pygame.draw.circle(self.screen, color, (ox, oy[idx]), 9)
-            self.screen.blit(self.small.render(names[idx], True, MUTED), (ox - 28, oy[idx] - 20))
+            center = (ox, oy[idx])
+            pygame.draw.circle(self.screen, color, center, 9)
+            node_rect = pygame.Rect(center[0] - 11, center[1] - 11, 22, 22)
+            self.nn_hitboxes.append((node_rect, f"{name} output", {"Activation": f"{value:+.4f}"}))
+            self.screen.blit(self.small.render(name, True, MUTED), (ox - 28, oy[idx] - 20))
 
     def _draw_stat_help_modal(self) -> None:
         if self.stat_help_key is None:
@@ -843,9 +913,11 @@ class TeachingApp:
         if self.section_help_key is None:
             return
         help_text = {
-            "controls": "Controls lets you run, pause, restart, step one frame, and change step speed so you can learn slowly.",
+            "controls": "Controls run or pause the sim, restart the current attempt, and step one frame at a time for debugging.",
+            "train": "Train Batch runs the configured number of training cycles immediately. Each cycle evaluates a population, keeps the best, mutates offspring, and replaces the active policy with the top performer.",
             "phase": "Phase shows Sense → Think → Act → Learn. It updates each frame so you can see what the AI is doing now.",
-            "nn": "Neural net view shows live neuron activations. Brighter nodes are stronger signals that influence steering, accel, and brake.",
+            "speed": "Speed controls simulation step rate from 0.25x to 32x. Use - and + to halve/double speed for careful inspection or fast iteration.",
+            "nn": "Neural net view shows live node and edge activity. Click any node/edge to inspect role, weight, contribution, and current activation.",
         }
         modal = pygame.Rect(300, 180, 680, 240)
         pygame.draw.rect(self.screen, (10, 14, 20), modal, border_radius=12)
@@ -875,8 +947,7 @@ class TeachingApp:
             ("max_steps", "Max steps", str(self.training_rules.max_steps)),
         ]
         toggle_defs = [
-            ("accel_head", "Use acceleration layer", self.policy.accel_weights is not None),
-            ("brake_head", "Use braking layer", self.policy.brake_weights is not None),
+            ("speed_control_heads", "Enable acceleration + braking heads", self.policy.accel_weights is not None),
         ]
         if not self.input_fields:
             self.input_fields = []
@@ -912,6 +983,20 @@ class TeachingApp:
         for b in self.buttons[-2:]:
             pygame.draw.rect(self.screen, (57, 70, 90), b.rect, border_radius=7)
             self.screen.blit(self.small.render(b.label, True, TEXT), (b.rect.x + 8, b.rect.y + 9))
+
+    def _draw_nn_detail_modal(self) -> None:
+        if self.nn_detail is None:
+            return
+        title, details = self.nn_detail
+        modal = pygame.Rect(320, 180, 640, 260)
+        pygame.draw.rect(self.screen, (10, 14, 20), modal, border_radius=12)
+        pygame.draw.rect(self.screen, ACCENT, modal, 2, border_radius=12)
+        self.screen.blit(self.big.render(title, True, TEXT), (modal.x + 20, modal.y + 20))
+        y = modal.y + 72
+        for key, value in details.items():
+            self.screen.blit(self.font.render(f"{key}: {value}", True, MUTED), (modal.x + 24, y))
+            y += 30
+        self.screen.blit(self.small.render("Click anywhere to close", True, ACCENT), (modal.x + 20, modal.bottom - 28))
 
     def _wrap_text(self, text: str, max_width: int) -> list[str]:
         words = text.split()
