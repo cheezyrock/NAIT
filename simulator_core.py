@@ -180,6 +180,33 @@ def distance_to_segment(point: Vec2, segment: Segment) -> float:
     return math.hypot(px - cx, py - cy)
 
 
+def _segment_point_distance(a: Vec2, b: Vec2, p: Vec2) -> float:
+    return distance_to_segment(p, (a, b))
+
+
+def _segments_intersect(a1: Vec2, a2: Vec2, b1: Vec2, b2: Vec2) -> bool:
+    r = _sub(a2, a1)
+    s = _sub(b2, b1)
+    denom = _cross(r, s)
+    if abs(denom) < 1e-9:
+        return False
+    qp = _sub(b1, a1)
+    t = _cross(qp, s) / denom
+    u = _cross(qp, r) / denom
+    return 0.0 <= t <= 1.0 and 0.0 <= u <= 1.0
+
+
+def distance_between_segments(a: Segment, b: Segment) -> float:
+    if _segments_intersect(a[0], a[1], b[0], b[1]):
+        return 0.0
+    return min(
+        _segment_point_distance(a[0], a[1], b[0]),
+        _segment_point_distance(a[0], a[1], b[1]),
+        _segment_point_distance(b[0], b[1], a[0]),
+        _segment_point_distance(b[0], b[1], a[1]),
+    )
+
+
 def ray_segment_intersection_distance(ray_origin: Vec2, ray_dir: Vec2, segment: Segment) -> float | None:
     """Distance from ray origin to segment intersection, or None if no hit."""
     p = ray_origin
@@ -307,9 +334,10 @@ class Simulator:
             )
             policy_output = self.policy.forward(sensor_values)
             steering = policy_output["steering"] if isinstance(policy_output, dict) else policy_output
+            prev_position = self.agent.position
             self.agent.step(steering=steering, dt=dt)
 
-            if self._is_colliding(self.agent.position):
+            if self._path_collides(prev_position, self.agent.position):
                 self.agent.alive = False
                 cause = "collision"
                 break
@@ -327,6 +355,13 @@ class Simulator:
         return any(
             distance_to_segment(position, segment) <= self.agent.collision_radius
             for segment in self.track.wall_segments
+        )
+
+    def _path_collides(self, start: Vec2, end: Vec2) -> bool:
+        swept_path: Segment = (start, end)
+        return any(
+            distance_between_segments(swept_path, wall) <= self.agent.collision_radius
+            for wall in self.track.wall_segments
         )
 
 

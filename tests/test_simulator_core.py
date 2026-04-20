@@ -59,6 +59,18 @@ class SimulationTests(unittest.TestCase):
         self.assertIn(result.cause_of_death, {"collision", "timeout", "alive"})
         self.assertGreater(len(result.path_trace), 1)
 
+    def test_collision_detected_when_wall_is_crossed_between_steps(self):
+        track = Track.from_segments([((1.0, -2.0), (1.0, 2.0))])
+        policy = LinearPolicy(sensor_angles_deg=[0.0], weights=[0.0], bias=0.0)
+        sensors = SensorArray(sensor_angles_deg=policy.sensor_angles_deg, max_range=4.0)
+        agent = CarAgent(position=(0.0, 0.0), heading_deg=0.0, speed=5.0, max_turn_rate_deg=0.0, collision_radius=0.1)
+
+        sim = Simulator(track=track, policy=policy, agent=agent, sensor_array=sensors)
+        result = sim.run(max_steps=1, dt=0.5)
+
+        self.assertEqual(result.cause_of_death, "collision")
+        self.assertFalse(agent.alive)
+
 
 if __name__ == "__main__":
     unittest.main()
