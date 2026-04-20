@@ -7,6 +7,7 @@ position and heading for stable demonstrations.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 from simulator_core import Track, build_rect_track
 
@@ -62,7 +63,42 @@ def _pinch_turn() -> Track:
     return Track.from_segments(segments)
 
 
+def _oval_racetrack() -> Track:
+    outer_cx, outer_cy = 9.0, 5.0
+    outer_rx, outer_ry = 8.0, 4.2
+    inner_rx, inner_ry = 4.8, 1.9
+    points = 44
+
+    segments = []
+    outer_points = [
+        (
+            outer_cx + math.cos((idx / points) * math.tau) * outer_rx,
+            outer_cy + math.sin((idx / points) * math.tau) * outer_ry,
+        )
+        for idx in range(points)
+    ]
+    inner_points = [
+        (
+            outer_cx + math.cos((idx / points) * math.tau) * inner_rx,
+            outer_cy + math.sin((idx / points) * math.tau) * inner_ry,
+        )
+        for idx in range(points)
+    ]
+
+    for idx in range(points):
+        segments.append((outer_points[idx], outer_points[(idx + 1) % points]))
+        segments.append((inner_points[idx], inner_points[(idx + 1) % points]))
+
+    return Track.from_segments(segments)
+
+
 TRACK_LIBRARY: dict[str, dict] = {
+    "oval_racetrack": {
+        "description": "Default oval with center cutout (non-drivable interior).",
+        "spawn": (2.2, 5.0),
+        "heading": 0.0,
+        "builder": _oval_racetrack,
+    },
     "rectangle": {
         "description": "Baseline corridor for first concepts.",
         "spawn": (2.0, 4.0),

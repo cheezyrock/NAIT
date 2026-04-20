@@ -51,6 +51,15 @@ class SimConfig:
     speed: float = 2.0
     max_turn_rate_deg: float = 120.0
     dt: float = 0.05
+    show_speed_controls: bool = False
+    enable_acceleration_model: bool = False
+
+
+@dataclass
+class UIButton:
+    label: str
+    action: str
+    rect: pygame.Rect
 
 
 class TeachingApp:
@@ -82,10 +91,17 @@ class TeachingApp:
         self.paused = False
         self.step_once = False
         self.training_summary: TrainSummary | None = None
+        self.total_training_cycles = 0
+        self.continuous_training = False
         self.last_steering = 0.0
         self.last_sensor_values = [0.0 for _ in self.policy.sensor_angles_deg]
+        self.last_sensor_hits: list[float | None] = [None for _ in self.policy.sensor_angles_deg]
         self.last_fitness = 0.0
+        self.last_reaction_time = 0.0
         self.status = "Ready"
+        self.simple_mode = True
+        self.sensor_spread_deg = 120.0
+        self.buttons: list[UIButton] = []
 
     def _policy_from_preset(self, preset_name: str) -> LinearPolicy:
         preset = PRESETS[preset_name]
@@ -121,6 +137,12 @@ class TeachingApp:
 
     def next_track(self) -> None:
         self.track_idx = (self.track_idx + 1) % len(self.track_names)
+        self.track_def = build_track_definition(self.track_names[self.track_idx])
+        self.reset_episode()
+        self.status = f"Switched to track: {self.track_def.name}"
+
+    def prev_track(self) -> None:
+        self.track_idx = (self.track_idx - 1) % len(self.track_names)
         self.track_def = build_track_definition(self.track_names[self.track_idx])
         self.reset_episode()
         self.status = f"Switched to track: {self.track_def.name}"
@@ -199,6 +221,7 @@ class TeachingApp:
         avg = sum(score for score, _ in final_scored) / len(final_scored)
         self.policy = final_scored[0][1]
         self.training_summary = TrainSummary(best_fitness=final_scored[0][0], avg_fitness=avg, cycles=rules.cycles)
+        self.total_training_cycles += rules.cycles
         self.sensor_array = SensorArray(
             sensor_angles_deg=list(self.policy.sensor_angles_deg),
             max_range=self.config.sensor_max_range,
@@ -216,6 +239,8 @@ class TeachingApp:
     def run(self) -> None:
         while self.running:
             self._handle_events()
+            if self.continuous_training:
+                self.train_current_track(TrainRules(cycles=1, population=12, mutation_strength=0.24, max_steps=180))
             if not self.paused or self.step_once:
                 self._tick_simulation(self.config.dt)
                 self.step_once = False
@@ -240,6 +265,8 @@ class TeachingApp:
                     self.step_once = True
                 elif event.key == pygame.K_t:
                     self.next_track()
+                elif event.key == pygame.K_y:
+                    self.prev_track()
                 elif event.key == pygame.K_1:
                     self.apply_preset("bad")
                 elif event.key == pygame.K_2:
@@ -262,17 +289,115 @@ class TeachingApp:
                     self.train_current_track(TrainRules(cycles=20, population=18))
                 elif event.key == pygame.K_h:
                     self.train_current_track(TrainRules(cycles=60, population=28, mutation_strength=0.3))
+                elif event.key == pygame.K_c:
+                    self.continuous_training = not self.continuous_training
+                    self.status = "Continuous training ON" if self.continuous_training else "Continuous training OFF"
+                elif event.key == pygame.K_m:
+                    self.simple_mode = not self.simple_mode
+                elif event.key == pygame.K_s:
+                    self.config.show_speed_controls = not self.config.show_speed_controls
+                elif event.key == pygame.K_a:
+                    self.config.enable_acceleration_model = not self.config.enable_acceleration_model
+                elif event.key == pygame.K_COMMA:
+                    self._set_sensor_layout(max(3, self.policy.sensor_count - 1), self.sensor_spread_deg)
+                elif event.key == pygame.K_PERIOD:
+                    self._set_sensor_layout(min(11, self.policy.sensor_count + 1), self.sensor_spread_deg)
+                elif event.key == pygame.K_SEMICOLON:
+                    self._set_sensor_layout(self.policy.sensor_count, max(40.0, self.sensor_spread_deg - 10.0))
+                elif event.key == pygame.K_QUOTE:
+                    self._set_sensor_layout(self.policy.sensor_count, min(170.0, self.sensor_spread_deg + 10.0))
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                self._handle_click(event.pos)
+
+    def _set_sensor_layout(self, sensor_count: int, spread_deg: float) -> None:
+        self.sensor_spread_deg = spread_deg
+        center = 0.0
+        if sensor_count == 1:
+            angles = [0.0]
+        else:
+            step = spread_deg / (sensor_count - 1)
+            angles = [center - (spread_deg / 2.0) + step * idx for idx in range(sensor_count)]
+        self.policy = LinearPolicy(sensor_angles_deg=angles, weights=[0.0 for _ in angles], bias=0.0)
+        self.sensor_array = SensorArray(sensor_angles_deg=list(self.policy.sensor_angles_deg), max_range=self.config.sensor_max_range)
+        self.last_sensor_values = [0.0 for _ in angles]
+        self.last_sensor_hits = [None for _ in angles]
+        self.status = f"Sensors updated: {sensor_count} over {spread_deg:.0f}°"
+        self.reset_episode()
+
+    def _handle_click(self, pos: tuple[int, int]) -> None:
+        for button in self.buttons:
+            if button.rect.collidepoint(pos):
+                self._run_action(button.action)
+                return
+
+    def _run_action(self, action: str) -> None:
+        if action == "pause":
+            self.paused = not self.paused
+        elif action == "reset":
+            self.reset_episode()
+        elif action == "step":
+            self.step_once = True
+        elif action == "next_track":
+            self.next_track()
+        elif action == "prev_track":
+            self.prev_track()
+        elif action == "quick_train":
+            self.train_current_track(TrainRules(cycles=20, population=18))
+        elif action == "deep_train":
+            self.train_current_track(TrainRules(cycles=60, population=28, mutation_strength=0.3))
+        elif action == "continuous":
+            self.continuous_training = not self.continuous_training
+        elif action == "sensor_plus":
+            self._set_sensor_layout(min(11, self.policy.sensor_count + 1), self.sensor_spread_deg)
+        elif action == "sensor_minus":
+            self._set_sensor_layout(max(3, self.policy.sensor_count - 1), self.sensor_spread_deg)
+        elif action == "spread_plus":
+            self._set_sensor_layout(self.policy.sensor_count, min(170.0, self.sensor_spread_deg + 10.0))
+        elif action == "spread_minus":
+            self._set_sensor_layout(self.policy.sensor_count, max(40.0, self.sensor_spread_deg - 10.0))
+        elif action == "toggle_simple":
+            self.simple_mode = not self.simple_mode
+        elif action == "toggle_speed":
+            self.config.show_speed_controls = not self.config.show_speed_controls
+        elif action == "toggle_accel":
+            self.config.enable_acceleration_model = not self.config.enable_acceleration_model
+        elif action == "speed_up":
+            self.config.speed = min(4.5, self.config.speed + 0.1)
+            self.reset_episode()
+        elif action == "speed_down":
+            self.config.speed = max(0.5, self.config.speed - 0.1)
+            self.reset_episode()
+        elif action == "turn_up":
+            self.config.max_turn_rate_deg = min(280.0, self.config.max_turn_rate_deg + 10.0)
+            self.reset_episode()
+        elif action == "turn_down":
+            self.config.max_turn_rate_deg = max(20.0, self.config.max_turn_rate_deg - 10.0)
+            self.reset_episode()
 
     def _tick_simulation(self, dt: float) -> None:
         if not self.agent.alive:
             return
 
-        self.last_sensor_values = self.sensor_array.read(
+        scan = self.sensor_array.read_with_distances(
             position=self.agent.position,
             heading_deg=self.agent.heading_deg,
             track=self.track_def.track,
         )
+        self.last_sensor_values = [reading for reading, _ in scan]
+        self.last_sensor_hits = [hit for _, hit in scan]
         self.last_steering = self.policy.forward(self.last_sensor_values)
+        front_distance = self.last_sensor_hits[len(self.last_sensor_hits) // 2]
+        if front_distance is not None and self.agent.speed > 0:
+            self.last_reaction_time = front_distance / self.agent.speed
+        else:
+            self.last_reaction_time = 0.0
+        if self.config.enable_acceleration_model:
+            target_speed = self.config.speed
+            if front_distance is not None and self.last_reaction_time < 1.25:
+                target_speed = max(0.5, self.config.speed * 0.45)
+            elif abs(self.last_steering) < 0.2:
+                target_speed = min(4.8, self.config.speed * 1.08)
+            self.agent.speed += (target_speed - self.agent.speed) * 0.12
         self.agent.step(self.last_steering, dt)
         self.last_fitness = self._fitness(self.simulator)
 
@@ -324,9 +449,17 @@ class TeachingApp:
         nose = (int(car[0] + math.cos(heading_rad) * 16), int(car[1] - math.sin(heading_rad) * 16))
         pygame.draw.line(self.screen, YELLOW, car, nose, 3)
 
-        for rel_angle, reading in zip(self.policy.sensor_angles_deg, self.last_sensor_values, strict=True):
+        for rel_angle, reading, hit_distance in zip(
+            self.policy.sensor_angles_deg,
+            self.last_sensor_values,
+            self.last_sensor_hits,
+            strict=True,
+        ):
             angle = math.radians(self.agent.heading_deg + rel_angle)
-            length = self.config.sensor_max_range * (0.12 + 0.88 * (1.0 - reading))
+            if hit_distance is None:
+                length = self.config.sensor_max_range
+            else:
+                length = min(self.config.sensor_max_range, hit_distance)
             world_end = (
                 self.agent.position[0] + math.cos(angle) * length,
                 self.agent.position[1] + math.sin(angle) * length,
@@ -351,32 +484,73 @@ class TeachingApp:
         line(f"Status: {self.status}", MUTED)
         line(f"Alive: {self.agent.alive}")
         line(f"Steering: {self.last_steering:+.3f}")
+        line(f"Speed: {self.agent.speed:.2f}")
+        line(f"Reaction time est: {self.last_reaction_time:.2f}s")
         line(f"Distance: {self.agent.distance_traveled:.2f}")
         line(f"Fitness: {self.last_fitness:.2f}")
+        line(f"Training cycles total: {self.total_training_cycles}")
+        line(f"Sensors: {self.policy.sensor_count} spread {self.sensor_spread_deg:.0f}°")
         y += 10
 
-        line("Keys", YELLOW)
-        line("Space pause/resume, R reset", MUTED)
-        line("N single-step, T next track", MUTED)
-        line("1/2/3 presets bad/decent/good", MUTED)
-        line("G quick-train (20), H deep-train (60)", MUTED)
-        line("[/] speed, -/= turn-rate", MUTED)
+        line("Mouse + Keyboard Controls", YELLOW)
+        line("Use buttons below or keys. C continuous train.", MUTED)
+        line("T/Y tracks. </> sensors. ;/' spread.", MUTED)
+        line("M simple mode. S speed panel. A accel model.", MUTED)
         y += 12
 
-        line("Custom Training Rules", YELLOW)
-        line("Currently wired to two fast presets:", MUTED)
-        line("G: cycles=20 pop=18 mutate=0.35", MUTED)
-        line("H: cycles=60 pop=28 mutate=0.35", MUTED)
-        y += 14
+        y = self._draw_buttons(x, y, panel_rect.width - 32)
+        y += 8
 
-        self._draw_nn_graph(x, y, panel_rect.width - 32, 225)
-        y += 240
+        if not self.simple_mode:
+            self._draw_nn_graph(x, y, panel_rect.width - 32, 225)
+            y += 240
 
         if self.training_summary:
             line("Last Training Summary", YELLOW)
             line(f"Cycles: {self.training_summary.cycles}", MUTED)
             line(f"Best fitness: {self.training_summary.best_fitness:.2f}", MUTED)
             line(f"Avg fitness:  {self.training_summary.avg_fitness:.2f}", MUTED)
+
+    def _draw_buttons(self, x: int, y: int, width: int) -> int:
+        self.buttons = []
+
+        def add(label: str, action: str, col: int, row: int, cols: int = 3) -> None:
+            gap = 8
+            button_w = (width - (cols - 1) * gap) // cols
+            button_h = 30
+            rect = pygame.Rect(x + col * (button_w + gap), y + row * (button_h + gap), button_w, button_h)
+            self.buttons.append(UIButton(label=label, action=action, rect=rect))
+
+        add("Pause/Run", "pause", 0, 0)
+        add("Reset", "reset", 1, 0)
+        add("Step", "step", 2, 0)
+        add("Prev Track", "prev_track", 0, 1)
+        add("Next Track", "next_track", 1, 1)
+        add("Train x20", "quick_train", 2, 1)
+        add("Train x60", "deep_train", 0, 2)
+        add("Continuous", "continuous", 1, 2)
+        add("Simple/Detail", "toggle_simple", 2, 2)
+        add("Sensors -", "sensor_minus", 0, 3)
+        add("Sensors +", "sensor_plus", 1, 3)
+        add("Toggle Accel", "toggle_accel", 2, 3)
+        add("Spread -", "spread_minus", 0, 4)
+        add("Spread +", "spread_plus", 1, 4)
+        add("Speed Ctrls", "toggle_speed", 2, 4)
+        if self.config.show_speed_controls:
+            add("Speed -", "speed_down", 0, 5)
+            add("Speed +", "speed_up", 1, 5)
+            add("Turn +/-", "turn_up", 2, 5)
+
+        for button in self.buttons:
+            active = button.action == "continuous" and self.continuous_training
+            color = (48, 120, 86) if active else (50, 63, 84)
+            pygame.draw.rect(self.screen, color, button.rect, border_radius=6)
+            pygame.draw.rect(self.screen, (112, 128, 153), button.rect, 1, border_radius=6)
+            label = self.small.render(button.label, True, TEXT)
+            self.screen.blit(label, (button.rect.x + 8, button.rect.y + 7))
+
+        rows = 6 if self.config.show_speed_controls else 5
+        return y + rows * 38
 
     def _draw_nn_graph(self, x: int, y: int, width: int, height: int) -> None:
         rect = pygame.Rect(x, y, width, height)

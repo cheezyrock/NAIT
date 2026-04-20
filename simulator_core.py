@@ -140,8 +140,9 @@ class SensorArray:
     sensor_angles_deg: list[float]
     max_range: float
 
-    def read(self, position: Vec2, heading_deg: float, track: Track) -> list[float]:
-        readings: list[float] = []
+    def read_with_distances(self, position: Vec2, heading_deg: float, track: Track) -> list[tuple[float, float | None]]:
+        """Return (normalized_reading, hit_distance) for each sensor."""
+        scan: list[tuple[float, float | None]] = []
         for rel_angle in self.sensor_angles_deg:
             angle = math.radians(heading_deg + rel_angle)
             direction = (math.cos(angle), math.sin(angle))
@@ -154,12 +155,17 @@ class SensorArray:
                 if hit_distance is None or d < hit_distance:
                     hit_distance = d
 
-            if hit_distance is None or hit_distance > self.max_range:
-                readings.append(0.0)
+            if hit_distance is None:
+                scan.append((0.0, None))
+            elif hit_distance > self.max_range:
+                scan.append((0.0, hit_distance))
             else:
-                readings.append(clamp(1.0 - (hit_distance / self.max_range), 0.0, 1.0))
+                scan.append((clamp(1.0 - (hit_distance / self.max_range), 0.0, 1.0), hit_distance))
 
-        return readings
+        return scan
+
+    def read(self, position: Vec2, heading_deg: float, track: Track) -> list[float]:
+        return [reading for reading, _ in self.read_with_distances(position, heading_deg, track)]
 
 
 @dataclass
