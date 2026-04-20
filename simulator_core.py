@@ -73,6 +73,82 @@ class LinearPolicy:
         return cls.from_dict(data)
 
 
+@dataclass
+class NeuralPolicy:
+    """Tiny teachable neural-network policy with optional output heads."""
+
+    sensor_angles_deg: list[float]
+    hidden_weights: list[list[float]]
+    hidden_biases: list[float]
+    steering_weights: list[float]
+    steering_bias: float = 0.0
+    accel_weights: list[float] | None = None
+    accel_bias: float = 0.0
+    brake_weights: list[float] | None = None
+    brake_bias: float = 0.0
+
+    def __post_init__(self) -> None:
+        sensor_count = len(self.sensor_angles_deg)
+        if sensor_count == 0:
+            raise ValueError("At least one sensor angle is required")
+        if len(self.hidden_weights) == 0:
+            raise ValueError("At least one hidden node is required")
+        if len(self.hidden_weights) != len(self.hidden_biases):
+            raise ValueError("hidden_weights and hidden_biases must be same length")
+        for row in self.hidden_weights:
+            if len(row) != sensor_count:
+                raise ValueError("Each hidden layer row must match sensor count")
+        hidden_count = len(self.hidden_weights)
+        if len(self.steering_weights) != hidden_count:
+            raise ValueError("steering_weights length must match hidden size")
+        if self.accel_weights is not None and len(self.accel_weights) != hidden_count:
+            raise ValueError("accel_weights length must match hidden size")
+        if self.brake_weights is not None and len(self.brake_weights) != hidden_count:
+            raise ValueError("brake_weights length must match hidden size")
+
+    @property
+    def sensor_count(self) -> int:
+        return len(self.sensor_angles_deg)
+
+    @property
+    def hidden_count(self) -> int:
+        return len(self.hidden_weights)
+
+    def forward_with_activations(self, sensor_values: Iterable[float]) -> tuple[dict[str, list[float]], dict[str, float]]:
+        sensor_values_list = list(sensor_values)
+        if len(sensor_values_list) != self.sensor_count:
+            raise ValueError("sensor_values length must match sensor count")
+
+        hidden: list[float] = []
+        for row, bias in zip(self.hidden_weights, self.hidden_biases, strict=True):
+            total = bias + sum(value * weight for value, weight in zip(sensor_values_list, row, strict=True))
+            hidden.append(math.tanh(total))
+
+        steering_raw = self.steering_bias + sum(value * weight for value, weight in zip(hidden, self.steering_weights, strict=True))
+        steering = math.tanh(steering_raw)
+
+        accel = 0.0
+        if self.accel_weights is not None:
+            accel_raw = self.accel_bias + sum(value * weight for value, weight in zip(hidden, self.accel_weights, strict=True))
+            accel = (math.tanh(accel_raw) + 1.0) / 2.0
+
+        brake = 0.0
+        if self.brake_weights is not None:
+            brake_raw = self.brake_bias + sum(value * weight for value, weight in zip(hidden, self.brake_weights, strict=True))
+            brake = (math.tanh(brake_raw) + 1.0) / 2.0
+
+        activations = {
+            "sensor": sensor_values_list,
+            "hidden": hidden,
+        }
+        outputs = {"steering": steering, "accel": accel, "brake": brake}
+        return activations, outputs
+
+    def forward(self, sensor_values: Iterable[float]) -> dict[str, float]:
+        _, outputs = self.forward_with_activations(sensor_values)
+        return outputs
+
+
 def clamp(value: float, min_value: float, max_value: float) -> float:
     return max(min_value, min(max_value, value))
 
@@ -212,7 +288,7 @@ class SimulationResult:
 @dataclass
 class Simulator:
     track: Track
-    policy: LinearPolicy
+    policy: LinearPolicy | NeuralPolicy
     agent: CarAgent
     sensor_array: SensorArray
 
@@ -229,7 +305,8 @@ class Simulator:
                 heading_deg=self.agent.heading_deg,
                 track=self.track,
             )
-            steering = self.policy.forward(sensor_values)
+            policy_output = self.policy.forward(sensor_values)
+            steering = policy_output["steering"] if isinstance(policy_output, dict) else policy_output
             self.agent.step(steering=steering, dt=dt)
 
             if self._is_colliding(self.agent.position):
